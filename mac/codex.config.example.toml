@@ -1,0 +1,11 @@
+model = "gemini-codex"
+model_provider = "zhuda_gemini_pool"
+model_context_window = 49152
+model_auto_compact_token_limit = 32000
+tool_output_token_limit = 4000
+
+[model_providers.zhuda_gemini_pool]
+name = "Zhuda Gemini Pool"
+base_url = "http://127.0.0.1:4000/v1"
+wire_api = "responses"
+experimental_bearer_token = "zhuda-codex-local-token"

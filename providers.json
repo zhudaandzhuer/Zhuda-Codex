@@ -1,0 +1,119 @@
+{
+  "version": 2,
+  "default_provider": "gemini",
+  "codex_models": [
+    {
+      "id": "zhuda-codex",
+      "label": "Zhuda-Codex"
+    },
+    {
+      "id": "gpt-5.5",
+      "label": "GPT-5.5"
+    },
+    {
+      "id": "gpt-5.4",
+      "label": "GPT-5.4"
+    },
+    {
+      "id": "gpt-5.4-mini",
+      "label": "GPT-5.4-Mini"
+    },
+    {
+      "id": "gpt-5.3-codex",
+      "label": "GPT-5.3-Codex"
+    },
+    {
+      "id": "gpt-5.2",
+      "label": "GPT-5.2"
+    }
+  ],
+  "providers": [
+    {
+      "id": "gemini",
+      "name": "Gemini",
+      "enabled": true,
+      "adapter": "gemini",
+      "api_key_label": "Gemini API key",
+      "api_key_hint": "AIza...",
+      "default_mappings": {
+        "zhuda-codex": "gemma-31b",
+        "gpt-5.5": "gemma-31b",
+        "gpt-5.4": "flash-3.5",
+        "gpt-5.4-mini": "flash-lite-3.1",
+        "gpt-5.3-codex": "pro-3.1",
+        "gpt-5.2": "flash-3.0"
+      },
+      "upstream_models": [
+        {
+          "id": "flash-3.5",
+          "label": "Flash 3.5",
+          "upstream": "gemini-3.5-flash"
+        },
+        {
+          "id": "flash-3.0",
+          "label": "Flash 3.0",
+          "upstream": "gemini-3-flash-preview"
+        },
+        {
+          "id": "flash-lite-3.1",
+          "label": "Flash Lite 3.1",
+          "upstream": "gemini-3.1-flash-lite"
+        },
+        {
+          "id": "pro-3.1",
+          "label": "Pro 3.1",
+          "upstream": "gemini-3.1-pro"
+        },
+        {
+          "id": "gemma-31b",
+          "label": "Gemma 31B",
+          "upstream": "gemma-4-31b-it"
+        }
+      ]
+    },
+    {
+      "id": "mimo",
+      "name": "Xiaomi MiMo",
+      "enabled": true,
+      "adapter": "mimo",
+      "api_key_label": "MiMo API key",
+      "api_key_hint": "sk-...",
+      "base_url": "https://api.xiaomimimo.com/v1",
+      "default_endpoint": "api",
+      "endpoint_options": [
+        {
+          "id": "api",
+          "label": "一般 API",
+          "base_url": "https://api.xiaomimimo.com/v1",
+          "description": "Use the standard MiMo API endpoint."
+        },
+        {
+          "id": "token-plan",
+          "label": "Token Plan",
+          "base_url": "https://token-plan-sgp.xiaomimimo.com/v1",
+          "description": "Use the MiMo token-plan endpoint."
+        }
+      ],
+      "default_mappings": {
+        "zhuda-codex": "mimo-v2.5-pro",
+        "gpt-5.5": "mimo-v2.5-pro",
+        "gpt-5.4": "mimo-v2.5-pro",
+        "gpt-5.4-mini": "mimo-v2.5",
+        "gpt-5.3-codex": "mimo-v2.5-pro",
+        "gpt-5.2": "mimo-v2.5"
+      },
+      "upstream_models": [
+        {
+          "id": "mimo-v2.5-pro",
+          "label": "MiMo v2.5 Pro",
+          "upstream": "mimo-v2.5-pro"
+        },
+        {
+          "id": "mimo-v2.5",
+          "label": "MiMo v2.5",
+          "upstream": "mimo-v2.5"
+        }
+      ]
+    }
+  ]
+}

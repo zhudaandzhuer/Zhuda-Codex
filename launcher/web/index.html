@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Zhuda-Codex Launcher</title>
+  <link rel="icon" type="image/png" sizes="180x180" href="/assets/brand/zhuda-codex-app-icon-180.png?v=2">
+  <link rel="apple-touch-icon" href="/assets/brand/zhuda-codex-app-icon-180.png?v=2">
+  <link rel="stylesheet" href="/web/styles.css">
+</head>
+<body>
+  <main class="shell">
+    <section class="brand-panel">
+      <div class="hero">
+        <img src="/assets/brand/zhuda-codex-launcher-hero-533x300.png" alt="Zhuda-Codex">
+      </div>
+      <div class="brand-copy">
+        <p class="eyebrow">Zhuda-Codex</p>
+        <h1>選廠商，配模型，啟動。</h1>
+        <p>每次只注入本次 API key；GPT 選單要映射到哪個上游模型，在這裡直接決定。</p>
+      </div>
+      <div class="status-strip">
+        <span id="statusDot" class="dot"></span>
+        <span id="statusText">Checking launcher...</span>
+      </div>
+      <div class="log-panel">
+        <div class="panel-title">Runtime</div>
+        <pre id="logBox">等待狀態...</pre>
+      </div>
+    </section>
+
+    <section class="control-panel">
+      <div class="topline">
+        <div>
+          <p class="eyebrow">Providers</p>
+          <h2>啟動器</h2>
+        </div>
+        <button id="refreshButton" type="button" class="icon-button" title="Refresh status">↻</button>
+      </div>
+
+      <div id="providerList" class="provider-list"></div>
+      <div id="resultBox" class="result-box" aria-live="polite"></div>
+    </section>
+  </main>
+  <script src="/web/app.js"></script>
+</body>
+</html>

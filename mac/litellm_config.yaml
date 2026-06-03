@@ -1,0 +1,69 @@
+model_list:
+  - model_name: gemini-codex
+    litellm_params:
+      model: gemini/gemini-3.1-flash-lite
+      api_key: os.environ/GEMINI_API_KEY_1
+      rpm: 10
+
+  - model_name: gemini-codex
+    litellm_params:
+      model: gemini/gemini-3.1-flash-lite
+      api_key: os.environ/GEMINI_API_KEY_2
+      rpm: 10
+
+  - model_name: gemini-codex
+    litellm_params:
+      model: gemini/gemini-3.1-flash-lite
+      api_key: os.environ/GEMINI_API_KEY_3
+      rpm: 10
+
+  - model_name: gemini-codex
+    litellm_params:
+      model: gemini/gemini-3.1-flash-lite
+      api_key: os.environ/GEMINI_API_KEY_4
+      rpm: 10
+
+  - model_name: gemini-codex
+    litellm_params:
+      model: gemini/gemini-3.1-flash-lite
+      api_key: os.environ/GEMINI_API_KEY_5
+      rpm: 10
+
+  - model_name: gemini-codex
+    litellm_params:
+      model: gemini/gemini-3.1-flash-lite
+      api_key: os.environ/GEMINI_API_KEY_6
+      rpm: 10
+
+  - model_name: gemini-codex
+    litellm_params:
+      model: gemini/gemini-3.1-flash-lite
+      api_key: os.environ/GEMINI_API_KEY_7
+      rpm: 10
+
+  - model_name: gemini-codex
+    litellm_params:
+      model: gemini/gemini-3.1-flash-lite
+      api_key: os.environ/GEMINI_API_KEY_8
+      rpm: 10
+
+  - model_name: gemini-codex
+    litellm_params:
+      model: gemini/gemini-3.1-flash-lite
+      api_key: os.environ/GEMINI_API_KEY_9
+      rpm: 10
+
+  - model_name: gemini-codex
+    litellm_params:
+      model: gemini/gemini-3.1-flash-lite
+      api_key: os.environ/GEMINI_API_KEY_10
+      rpm: 10
+
+litellm_settings:
+  drop_params: true
+  num_retries: 2
+  request_timeout: 120
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+
