@@ -8,9 +8,9 @@ API key 只在本次启动时通过进程环境变量注入，不写入仓库，
 
 ## 现在的状态
 
-- macOS 版本已经有 Web 启动器、独立 App 包、本地 adapter、模型菜单注入、错误边界处理。
+- macOS 版本已经有 Web 启动器、独立 App 包、本地 adapter、模型菜单 bundle 补丁、错误边界处理。
 - Windows 版本已经有 Web 启动器、供应商选择、API key 会话注入、portable 构建脚本。
-- Windows 还没有完全追上 macOS 的模型菜单注入能力；如果 Codex 前端不刷新模型菜单，仍可能看到内置 GPT 名称，但请求会由本地 adapter 映射到你选择的上游模型。
+- Windows portable 构建脚本会在可用时给 `app.asar` 套用同一套模型菜单 bundle 补丁；如果构建机缺少 Python 或 npx，会退回模型缓存和运行时注入兜底。
 - GitHub 仓库发布的是源码，不等于已经打好的 portable 成品包。Windows 想免安装运行，需要先用构建脚本生成 portable 包，或等待 Release zip。
 
 ## 支持的供应商
@@ -47,6 +47,13 @@ cd /path/to/ZhudaCodex
 
 如果已经构建了 `mac/dist/Zhuda-Codex.app`，启动器会通过这个独立 App 启动 Codex，并在当前会话注入模型菜单。
 
+如果需要重新给独立 App 套用模型菜单补丁：
+
+```bash
+python3 scripts/patch_codex_asar_models.py \
+  --asar mac/dist/Zhuda-Codex.app/Contents/Resources/app.asar
+```
+
 ### Windows 源码运行
 
 ```powershell
@@ -72,6 +79,8 @@ Documents\ZhudaCodex\portable\Zhuda-Codex-Portable.zip
 
 生成后的 portable 包才是更接近“下载后直接运行”的版本。仓库源码本身不会包含 `app/Codex.exe`、本地 profile、运行日志或 API key。
 
+构建脚本会优先尝试修补 portable 内部的 `app.asar`，让模型菜单直接读取本地 adapter 的 `/pool/status`。如果构建环境没有 Python 或 npx，脚本会保留旧的模型缓存和运行时注入兜底，不会中断 portable 生成。
+
 ## 目录结构
 
 ```text
@@ -82,6 +91,7 @@ ZhudaCodex/
   mac/                       macOS adapter、App 包装脚本、局域网日志接收器
   win/                       Windows 启动器、远程接入脚本、portable 构建脚本
   providers.json             供应商和模型清单
+  scripts/                    维护脚本，例如 app.asar 模型菜单补丁
   tests/                     adapter 边界测试
 ```
 
@@ -127,6 +137,7 @@ rg -n "AIza|sk-[A-Za-z0-9_-]{12,}|192\\.168\\.|api[_-]?key\\s*[:=]" \
 
 ```bash
 python3 -m py_compile mac/zhuda_gemini_pool_adapter.py launcher/zhuda_web_launcher.py
+python3 -m py_compile scripts/patch_codex_asar_models.py
 node -c launcher/web/app.js
 python3 -m json.tool providers.json >/dev/null
 python3 tests/test_adapter_boundaries.py
@@ -146,7 +157,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\win\Zhuda-Codex-Launcher.p
 
 ### 为什么 Codex 菜单里还是 GPT 名称？
 
-某些 Codex Desktop 前端会锁死内置模型菜单。macOS 版本会尝试用本地模型菜单注入把真实模型显示出来；Windows 版本目前主要依靠 adapter 映射。即使菜单显示 GPT，实际请求仍会按照启动器注入的映射发给对应上游模型。
+某些 Codex Desktop 前端会锁死内置模型菜单。Zhuda-Codex portable 会优先用 `app.asar` bundle 补丁，让菜单直接读取本地 adapter 的 `/pool/status`，显示当前供应商可用的真实模型。若补丁未套用成功，系统会退回模型缓存或运行时注入兜底；即使菜单显示 GPT，实际请求仍会按照启动器注入的映射发给对应上游模型。
 
 ### adapter 会不会自动切模型？
 

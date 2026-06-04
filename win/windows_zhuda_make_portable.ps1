@@ -452,6 +452,65 @@ Logs:
     Write-Utf8NoBom (Join-Path $PortableRoot "README.txt") $readme
 }
 
+function Find-AppAsar {
+    param([string]$PortableRoot)
+    foreach ($path in @(
+        (Join-Path $PortableRoot "app\resources\app.asar"),
+        (Join-Path $PortableRoot "app\Resources\app.asar"),
+        (Join-Path $PortableRoot "app\app.asar")
+    )) {
+        if (Test-Path $path) { return $path }
+    }
+    $found = Get-ChildItem -Path (Join-Path $PortableRoot "app") -Filter "app.asar" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($found) { return $found.FullName }
+    return ""
+}
+
+function Find-PythonCommand {
+    foreach ($name in @("python.exe", "python3.exe", "py.exe", "python", "python3", "py")) {
+        $cmd = Get-Command $name -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($cmd) { return $cmd.Source }
+    }
+    return ""
+}
+
+function Find-NpxCommand {
+    foreach ($name in @("npx.cmd", "npx.exe", "npx")) {
+        $cmd = Get-Command $name -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($cmd) { return $cmd.Source }
+    }
+    return ""
+}
+
+function Patch-AppAsarModelList {
+    param([string]$PortableRoot)
+    $asar = Find-AppAsar $PortableRoot
+    if (-not $asar) {
+        Write-Warning "app.asar not found; model menu will use model cache/injector fallback."
+        return
+    }
+    $patcher = Join-Path $PortableRoot "tools\patch_codex_asar_models.py"
+    if (-not (Test-Path $patcher)) {
+        Write-Warning "Zhuda bundle patcher not found; model menu will use model cache/injector fallback."
+        return
+    }
+    $python = Find-PythonCommand
+    $npx = Find-NpxCommand
+    if (-not $python -or -not $npx) {
+        Write-Warning "Python or npx not found; app.asar model-list patch skipped."
+        return
+    }
+    $env:PATH = (Split-Path -Parent $npx) + [IO.Path]::PathSeparator + $env:PATH
+    if ((Split-Path -Leaf $python).ToLowerInvariant() -eq "py.exe" -or (Split-Path -Leaf $python).ToLowerInvariant() -eq "py") {
+        & $python -3 $patcher --asar $asar | Out-Host
+    } else {
+        & $python $patcher --asar $asar | Out-Host
+    }
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warning "app.asar model-list patch failed with exit code $LASTEXITCODE; model cache/injector fallback remains available."
+    }
+}
+
 function Main {
     Ensure-Dir $RuntimeDir
     $receiver = Resolve-ReceiverUrl
@@ -492,6 +551,20 @@ function Main {
         }
         if (-not (Test-Path $local)) { throw "missing tool script: $local" }
         Copy-Item $local (Join-Path $tmpRoot "tools\$name") -Force
+    }
+
+    $patcherName = "patch_codex_asar_models.py"
+    $patcherLocal = Join-Path $RuntimeDir $patcherName
+    if ($receiver) {
+        try { Download-File "$receiver/download/$patcherName" $patcherLocal } catch {}
+    }
+    if (-not (Test-Path $patcherLocal)) {
+        $sourceRootForPatcher = Split-Path -Parent (Split-Path -Parent $PSCommandPath)
+        $candidate = Join-Path $sourceRootForPatcher "scripts\$patcherName"
+        if (Test-Path $candidate) { $patcherLocal = $candidate }
+    }
+    if (Test-Path $patcherLocal) {
+        Copy-Item $patcherLocal (Join-Path $tmpRoot "tools\$patcherName") -Force
     }
 
     foreach ($name in @("providers.json", "Zhuda-Codex-Launcher.ps1", "Zhuda-Codex-Launcher.cmd")) {
@@ -557,6 +630,7 @@ function Main {
     }
 
     Build-Launcher $tmpRoot $Model $receiver
+    Patch-AppAsarModelList $tmpRoot
 
     if (Test-Path $portableRoot) { Remove-TreeRobust $portableRoot }
     Move-Item $tmpRoot $portableRoot

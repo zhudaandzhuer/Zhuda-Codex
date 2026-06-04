@@ -11,12 +11,13 @@ Windows 已经追上这些能力：
 - 本次会话 API key 注入，不把 key 写入源码目录。
 - 真实上游模型选择和 adapter 映射。
 - portable 构建脚本。
+- portable 构建时的 `app.asar` 模型菜单补丁。
 - 局域网日志转发和远程接入脚本。
 
-Windows 暂时还没完全追上 macOS 的部分：
+Windows 和 macOS 仍有一点差异：
 
-- macOS 有模型菜单注入脚本，可以把 Codex 前端菜单尽量改成真实模型名。
-- Windows 目前主要依赖 adapter 映射；菜单里可能仍显示 Codex 内置 GPT 名称，但实际请求会按启动器注入的映射走。
+- Windows portable 构建脚本会在可用时给 `app.asar` 套模型菜单补丁，让菜单读取本地 adapter 的 `/pool/status`。
+- 如果构建机没有 Python 或 npx，模型菜单补丁会跳过，并退回模型缓存和运行时注入兜底；这时菜单里可能仍显示 Codex 内置 GPT 名称，但实际请求会按启动器注入的映射走。
 - Windows portable 包需要从已安装的 Codex AppX 复制 `Codex.exe`，GitHub 源码本身不会包含这个文件。
 
 ## 源码启动
@@ -61,6 +62,8 @@ tools\windows_zhuda_local_adapter.ps1
 
 这些是构建 portable 时生成或复制出来的运行时文件。
 
+构建脚本会尝试修补 portable 内部的 `app.asar`。需要构建机能运行 Python 和 npx；如果缺少其中之一，脚本会继续生成 portable 包，只是模型菜单会使用缓存/注入兜底。
+
 ## 远程接入
 
 如果 macOS 接收器已经启动，在 Windows 机器上执行：
@@ -79,7 +82,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command "iwr 'http://YOUR_MAC_IP:
 
 ### Windows 和 macOS 完全一样吗？
 
-还没有。核心 adapter 和 Web 启动器方向一致，但 macOS 已经有独立 App 包和模型菜单注入；Windows 目前更像“源码启动 + portable 构建器”。后续可以补 Windows 菜单注入或更完整的一键打包。
+核心 adapter 和 Web 启动器方向一致。macOS 已经有独立 App 包；Windows 通过 portable 构建器从已安装的 Codex AppX 复制应用本体。两边都会优先使用 `app.asar` 模型菜单补丁，失败时再退回缓存/注入兜底。
 
 ### API key 会保存吗？
 

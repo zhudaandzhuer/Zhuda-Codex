@@ -544,6 +544,7 @@ function Status-Text {
     param([int]$StatusCode)
     switch ($StatusCode) {
         200 { "OK" }
+        204 { "No Content" }
         400 { "Bad Request" }
         404 { "Not Found" }
         500 { "Internal Server Error" }
@@ -555,7 +556,7 @@ function Write-RawHeaders {
     param($Context, [int]$StatusCode, [string]$ContentType, $ContentLength)
     if (-not $Context.PSObject.Properties["Raw"]) { return }
     if ($Context.HeadersSent) { return }
-    $headers = "HTTP/1.1 $StatusCode $(Status-Text $StatusCode)`r`nContent-Type: $ContentType`r`nCache-Control: no-cache`r`nConnection: close`r`n"
+    $headers = "HTTP/1.1 $StatusCode $(Status-Text $StatusCode)`r`nContent-Type: $ContentType`r`nCache-Control: no-cache`r`nConnection: close`r`nAccess-Control-Allow-Origin: *`r`nAccess-Control-Allow-Methods: GET, POST, OPTIONS`r`nAccess-Control-Allow-Headers: *`r`n"
     if ($null -ne $ContentLength) { $headers += "Content-Length: $ContentLength`r`n" }
     $headers += "`r`n"
     $bytes = [Text.Encoding]::ASCII.GetBytes($headers)
@@ -574,6 +575,11 @@ function Send-Bytes {
     }
     $Context.Response.StatusCode = $StatusCode
     $Context.Response.ContentType = $ContentType
+    try {
+        $Context.Response.Headers["Access-Control-Allow-Origin"] = "*"
+        $Context.Response.Headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+        $Context.Response.Headers["Access-Control-Allow-Headers"] = "*"
+    } catch {}
     $Context.Response.ContentLength64 = $Bytes.Length
     $Context.Response.OutputStream.Write($Bytes, 0, $Bytes.Length)
     try { $Context.Response.OutputStream.Flush() } catch {}
@@ -1324,8 +1330,12 @@ function Handle-Request {
     try {
         Load-RuntimeConfig
         $path = $Context.Request.Url.AbsolutePath
-        if ($Context.Request.HttpMethod -eq "GET" -and $path -eq "/health/readiness") {
-            Send-Json $Context @{ status = "healthy"; adapter = "zhuda-local-powershell"; provider = $Provider; keys = 1; model = $GeminiModel; apiKeySet = [bool]$GeminiApiKey; apiKeyHint = (Get-ApiKeyHint) }
+        if ($Context.Request.HttpMethod -eq "OPTIONS") {
+            Send-Text $Context "" "text/plain; charset=utf-8" 204
+        } elseif ($Context.Request.HttpMethod -eq "GET" -and $path -eq "/health/readiness") {
+            $visibleModels = @(Get-VisibleModelNames)
+            $providerName = if ($Provider -eq "mimo") { "Xiaomi MiMo" } else { "Gemini" }
+            Send-Json $Context @{ status = "healthy"; adapter = "zhuda-local-powershell"; provider = $Provider; providerName = $providerName; keys = 1; model = $GeminiModel; visibleModels = $visibleModels; selectedCodeModel = $GeminiModel; selectedUpstreamModel = $GeminiModel; apiKeySet = [bool]$GeminiApiKey; apiKeyHint = (Get-ApiKeyHint) }
         } elseif ($Context.Request.HttpMethod -eq "GET" -and $path -eq "/pool/status") {
             $modelMap = @{}
             foreach ($spec in (Get-ZhudaModelCatalogSpecs)) {
@@ -1334,7 +1344,9 @@ function Handle-Request {
             foreach ($slug in @("gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex", "gpt-5.2", "codex-auto-review")) {
                 $modelMap[$slug] = Resolve-RequestedGeminiModel $slug
             }
-            Send-Json $Context @{ provider = $Provider; keyCount = 1; defaultUpstreamModel = $GeminiModel; forceUpstreamModel = $null; models = $modelMap; apiKeySet = [bool]$GeminiApiKey; apiKeyHint = (Get-ApiKeyHint); nextKeyIndex = 1; runtime = @{ maxKeyAttempts = 1; upstreamTimeoutSeconds = (Get-UpstreamTimeoutSec); maxPromptChars = $MaxPromptChars; activeCooldowns = @(); rateProfile = (Get-RateProfile); localRpmLimits = @{ "gemini-3.5-flash" = (Get-LocalRpmLimit "gemini-3.5-flash"); "gemini-3.1-flash-lite" = (Get-LocalRpmLimit "gemini-3.1-flash-lite"); "gemini-3-flash-preview" = (Get-LocalRpmLimit "gemini-3-flash-preview"); "gemma-4-31b-it" = (Get-LocalRpmLimit "gemma-4-31b-it"); "gemma-4-26b-a4b-it" = (Get-LocalRpmLimit "gemma-4-26b-a4b-it"); "mimo-v2.5-pro" = (Get-LocalRpmLimit "mimo-v2.5-pro"); "mimo-v2.5" = (Get-LocalRpmLimit "mimo-v2.5") } } }
+            $visibleModels = @(Get-VisibleModelNames)
+            $providerName = if ($Provider -eq "mimo") { "Xiaomi MiMo" } else { "Gemini" }
+            Send-Json $Context @{ provider = $Provider; providerName = $providerName; keyCount = 1; defaultUpstreamModel = $GeminiModel; selectedCodeModel = $GeminiModel; selectedUpstreamModel = $GeminiModel; visibleModels = $visibleModels; forceUpstreamModel = $null; models = $modelMap; apiKeySet = [bool]$GeminiApiKey; apiKeyHint = (Get-ApiKeyHint); nextKeyIndex = 1; runtime = @{ maxKeyAttempts = 1; upstreamTimeoutSeconds = (Get-UpstreamTimeoutSec); maxPromptChars = $MaxPromptChars; activeCooldowns = @(); rateProfile = (Get-RateProfile); localRpmLimits = @{ "gemini-3.5-flash" = (Get-LocalRpmLimit "gemini-3.5-flash"); "gemini-3.1-flash-lite" = (Get-LocalRpmLimit "gemini-3.1-flash-lite"); "gemini-3-flash-preview" = (Get-LocalRpmLimit "gemini-3-flash-preview"); "gemma-4-31b-it" = (Get-LocalRpmLimit "gemma-4-31b-it"); "gemma-4-26b-a4b-it" = (Get-LocalRpmLimit "gemma-4-26b-a4b-it"); "mimo-v2.5-pro" = (Get-LocalRpmLimit "mimo-v2.5-pro"); "mimo-v2.5" = (Get-LocalRpmLimit "mimo-v2.5") } } }
         } elseif ($Context.Request.HttpMethod -eq "GET" -and $path -eq "/v1/models") {
             $items = @((Get-ZhudaModelCatalogSpecs) | ForEach-Object { @{ id = $_.Slug; object = "model"; owned_by = "zhuda-local-powershell" } })
             $items += @("gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex", "gpt-5.2", "codex-auto-review") | ForEach-Object { @{ id = $_; object = "model"; owned_by = "zhuda-local-powershell" } }

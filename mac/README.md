@@ -1,6 +1,6 @@
 # Zhuda-Codex macOS
 
-这里放 macOS 版本的本地 adapter、Web 启动器、独立 App 包装脚本、模型菜单注入脚本，以及局域网日志/控制接收器。
+这里放 macOS 版本的本地 adapter、Web 启动器、独立 App 包装脚本、模型菜单 bundle 补丁/注入脚本，以及局域网日志/控制接收器。
 
 ## 本地启动
 
@@ -13,6 +13,13 @@
 启动器会打开本地 Web 页面。选择供应商、选择默认真实模型、输入本次会话 API key，然后启动 Codex。API key 只通过进程环境变量注入，不会写进源码目录。
 
 如果 `mac/dist/Zhuda-Codex.app` 已经存在，launcher 会使用这个独立 App 包。它不会覆盖系统里的官方 Codex，也不会把 provider 配置写进官方 Codex 全局配置。
+
+模型菜单优先通过 `app.asar` bundle 补丁读取本地 adapter 的 `/pool/status`。如果重新构建或替换了 App 包，可以手动重套补丁：
+
+```bash
+python3 scripts/patch_codex_asar_models.py \
+  --asar mac/dist/Zhuda-Codex.app/Contents/Resources/app.asar
+```
 
 ## Adapter
 
@@ -64,15 +71,17 @@ experimental_bearer_token = "zhuda-codex-local-token"
 
 provider 名称里保留 `gemini_pool` 是历史遗留；现在 adapter 可以根据启动器选择路由到 Gemini、MiMo、DeepSeek 等供应商。
 
-## 模型菜单注入
+## 模型菜单
 
-有些 Codex Desktop 版本会忽略 adapter 暴露的 `/v1/models`，继续显示内置 GPT 名称。macOS 独立 App 会在启动时打开一个仅限 localhost 的临时 DevTools 端口，并运行：
+有些 Codex Desktop 版本会忽略 adapter 暴露的 `/v1/models`，继续显示内置 GPT 名称。Zhuda-Codex 现在优先修补独立 App 的 `app.asar`，让模型菜单直接读取本地 adapter 的 `/pool/status`。
+
+启动时仍保留一个仅限 localhost 的临时 DevTools 注入器作为备援：
 
 ```text
 mac/scripts/zhuda_model_injector.py
 ```
 
-它只修改当前渲染器会话里的模型菜单，不改官方 Codex 安装包。
+注入器只修改当前渲染器会话里的模型菜单，不改官方 Codex 安装包。
 
 可选环境变量：
 

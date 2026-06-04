@@ -15,6 +15,7 @@ from urllib.parse import unquote, urlparse
 
 import httpx
 from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 
 
@@ -113,6 +114,13 @@ VISUAL_INTENT_RE = re.compile(
 )
 
 app = FastAPI()
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["*"],
+)
 cursor = 0
 cooldowns: dict[tuple[str, int], float] = {}
 cooldown_reasons: dict[tuple[str, int], str] = {}
@@ -3720,6 +3728,8 @@ async def logs_events(file: str = "adapter.episodes.jsonl", lines: int = LOG_TAI
 async def readiness():
     provider = current_provider()
     keys = provider_keys(provider)
+    selected_codex_model = os.environ.get("ZHUDA_SELECTED_CODEX_MODEL", "").strip()
+    selected_upstream_model = os.environ.get("ZHUDA_SELECTED_UPSTREAM_MODEL", "").strip()
     return {
         "status": "healthy",
         "provider": provider,
@@ -3727,6 +3737,8 @@ async def readiness():
         "adapter": f"zhuda-codex-{provider}-adapter",
         "models": visible_model_ids(),
         "forceUpstreamModel": forced_upstream_model(),
+        "selectedCodeModel": selected_codex_model,
+        "selectedUpstreamModel": selected_upstream_model,
         "nextKeyIndex": (cursor % max(len(keys), 1)) + 1,
     }
 
@@ -3735,6 +3747,8 @@ async def readiness():
 async def pool_status():
     provider = current_provider()
     keys = provider_keys(provider)
+    selected_codex_model = os.environ.get("ZHUDA_SELECTED_CODEX_MODEL", "").strip()
+    selected_upstream_model = os.environ.get("ZHUDA_SELECTED_UPSTREAM_MODEL", "").strip()
     now = time.monotonic()
     active_cooldowns = [
         {
@@ -3758,6 +3772,8 @@ async def pool_status():
         "models": model_aliases(),
         "visibleModels": visible_model_ids(),
         "forceUpstreamModel": forced_upstream_model(),
+        "selectedCodeModel": selected_codex_model,
+        "selectedUpstreamModel": selected_upstream_model,
         "runtime": {
             "maxInputTokens": max_input_tokens_limit(),
             "maxPinnedTokens": max_pinned_tokens_limit(),

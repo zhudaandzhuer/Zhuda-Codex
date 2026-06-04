@@ -21,6 +21,7 @@ BUNDLED_ADAPTER_ROOT="${APP_DIR}/Resources/zhuda"
 BUNDLED_ADAPTER_FILE="${BUNDLED_ADAPTER_ROOT}/zhuda_gemini_pool_adapter.py"
 BUNDLED_MODEL_INJECTOR_FILE="${BUNDLED_ADAPTER_ROOT}/zhuda_model_injector.py"
 BUNDLED_VENV_ROOT="${BUNDLED_ADAPTER_ROOT}/python-runtime"
+BUNDLE_MODEL_PATCH_MARKER="${APP_DIR}/Resources/app.asar.zhuda-models-patched"
 ADAPTER_RUNTIME_ROOT="${SUPPORT_ROOT}/adapters/gemini"
 ADAPTER_FILE="${ADAPTER_RUNTIME_ROOT}/zhuda_gemini_pool_adapter.py"
 MODEL_INJECTOR_FILE="${ADAPTER_RUNTIME_ROOT}/zhuda_model_injector.py"
@@ -400,7 +401,14 @@ choose_cdp_port() {
   MODEL_INJECTOR_ERR="${LOG_DIR}/model-injector-${CDP_PORT}.err.log"
 }
 
+bundle_model_patch_enabled() {
+  [[ -f "$BUNDLE_MODEL_PATCH_MARKER" && "${ZHUDA_FORCE_MODEL_INJECTOR:-0}" != "1" ]]
+}
+
 start_model_injector() {
+  if bundle_model_patch_enabled; then
+    return 0
+  fi
   local models
   models="$(selected_visible_models)"
   if [[ -z "$models" ]]; then
@@ -429,6 +437,9 @@ start_model_injector() {
 ZHUDA_CODEX_DEBUG_ARGS=()
 set_codex_debug_args() {
   ZHUDA_CODEX_DEBUG_ARGS=()
+  if bundle_model_patch_enabled; then
+    return 0
+  fi
   if [[ -n "$(selected_visible_models)" ]]; then
     ZHUDA_CODEX_DEBUG_ARGS=("--remote-debugging-address=127.0.0.1" "--remote-debugging-port=${CDP_PORT}")
   fi
@@ -452,6 +463,8 @@ if [[ "${1:-}" == "--zhuda-dry-run" ]]; then
   echo "adapter_runner=$ADAPTER_RUNNER"
   echo "config_file=$CONFIG_FILE"
   echo "model_injector=$MODEL_INJECTOR_FILE"
+  echo "bundle_model_patch_marker=$BUNDLE_MODEL_PATCH_MARKER"
+  echo "bundle_model_patch_enabled=$(bundle_model_patch_enabled && echo 1 || echo 0)"
   exit 0
 fi
 
