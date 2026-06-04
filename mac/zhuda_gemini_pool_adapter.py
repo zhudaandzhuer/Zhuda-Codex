@@ -27,11 +27,20 @@ DEFAULT_MAX_INPUT_TOKENS = 24000
 DEFAULT_MAX_PINNED_TOKENS = 5000
 DEFAULT_MAX_HISTORY_ITEM_TOKENS = 3000
 DEFAULT_MAX_TOOL_OUTPUT_CHARS = 3000
+DEFAULT_MIMO_MAX_INPUT_TOKENS = 12000
+DEFAULT_MIMO_MAX_PINNED_TOKENS = 3500
+DEFAULT_MIMO_MAX_HISTORY_ITEM_TOKENS = 1200
+DEFAULT_MIMO_MAX_TOOL_OUTPUT_CHARS = 1200
+DEFAULT_MIMO_MAX_OUTPUT_TOKENS = 2048
 DEFAULT_MAX_KEY_ATTEMPTS = 2
 DEFAULT_MAX_MODEL_ATTEMPTS = 2
 DEFAULT_UPSTREAM_TIMEOUT_SECONDS = 60
+DEFAULT_MIMO_UPSTREAM_TIMEOUT_SECONDS = 90
 DEFAULT_RATE_LIMIT_COOLDOWN_SECONDS = 45
+DEFAULT_MIMO_RATE_LIMIT_COOLDOWN_SECONDS = 120
 DEFAULT_ERROR_COOLDOWN_SECONDS = 10
+DEFAULT_MIMO_ERROR_COOLDOWN_SECONDS = 45
+DEFAULT_MIMO_TIMEOUT_COOLDOWN_SECONDS = 90
 DEFAULT_GLOBAL_MIN_INTERVAL_SECONDS = 1.0
 DEFAULT_MAX_REPEAT_VISUAL_TOOL_CALLS = 3
 DEFAULT_MAX_REPEAT_TOOL_CALLS = 4
@@ -46,14 +55,17 @@ DEFAULT_LARGE_PROMPT_MAX_INLINE_IMAGES = 1
 DEFAULT_LARGE_PROMPT_MAX_MODEL_ATTEMPTS = 1
 DEFAULT_LARGE_PROMPT_MIN_INTERVAL_SECONDS = 15.0
 DEFAULT_LARGE_PROMPT_RATE_LIMIT_COOLDOWN_SECONDS = 120
+DEFAULT_MIMO_LARGE_PROMPT_TOKEN_THRESHOLD = 12000
+DEFAULT_MIMO_LARGE_PROMPT_MIN_INTERVAL_SECONDS = 25.0
+DEFAULT_MIMO_LARGE_PROMPT_RATE_LIMIT_COOLDOWN_SECONDS = 180
 DEFAULT_MODEL_MIN_INTERVAL_SECONDS = {
     "gemini-3.1-flash-lite": 6.0,
     "gemma-4-26b-a4b-it": 6.0,
     "gemma-4-31b-it": 6.0,
     "gemini-3.5-flash": 12.0,
     "gemini-3-flash-preview": 12.0,
-    "mimo-v2.5-pro": 6.0,
-    "mimo-v2.5": 4.0,
+    "mimo-v2.5-pro": 12.0,
+    "mimo-v2.5": 8.0,
 }
 DEFAULT_FALLBACK_UPSTREAM_MODELS = [
     "gemini-3.5-flash",
@@ -678,6 +690,104 @@ def env_bool(name: str, default: bool = False) -> bool:
     return default
 
 
+def provider_env_int(name: str, default: int, mimo_default: int) -> int:
+    default_value = mimo_default if current_provider() == "mimo" else default
+    return env_int(name, default_value)
+
+
+def max_input_tokens_limit() -> int:
+    return provider_env_int("ZHUDA_MAX_INPUT_TOKENS", DEFAULT_MAX_INPUT_TOKENS, DEFAULT_MIMO_MAX_INPUT_TOKENS)
+
+
+def max_pinned_tokens_limit() -> int:
+    return provider_env_int("ZHUDA_MAX_PINNED_TOKENS", DEFAULT_MAX_PINNED_TOKENS, DEFAULT_MIMO_MAX_PINNED_TOKENS)
+
+
+def max_history_item_tokens_limit() -> int:
+    return provider_env_int(
+        "ZHUDA_MAX_HISTORY_ITEM_TOKENS",
+        DEFAULT_MAX_HISTORY_ITEM_TOKENS,
+        DEFAULT_MIMO_MAX_HISTORY_ITEM_TOKENS,
+    )
+
+
+def max_tool_output_chars_limit() -> int:
+    return provider_env_int(
+        "ZHUDA_MAX_TOOL_OUTPUT_CHARS",
+        DEFAULT_MAX_TOOL_OUTPUT_CHARS,
+        DEFAULT_MIMO_MAX_TOOL_OUTPUT_CHARS,
+    )
+
+
+def upstream_timeout_seconds() -> int:
+    return provider_env_int(
+        "ZHUDA_UPSTREAM_TIMEOUT_SECONDS",
+        DEFAULT_UPSTREAM_TIMEOUT_SECONDS,
+        DEFAULT_MIMO_UPSTREAM_TIMEOUT_SECONDS,
+    )
+
+
+def rate_limit_cooldown_seconds() -> int:
+    return provider_env_int(
+        "ZHUDA_RATE_LIMIT_COOLDOWN_SECONDS",
+        DEFAULT_RATE_LIMIT_COOLDOWN_SECONDS,
+        DEFAULT_MIMO_RATE_LIMIT_COOLDOWN_SECONDS,
+    )
+
+
+def error_cooldown_seconds() -> int:
+    return provider_env_int(
+        "ZHUDA_ERROR_COOLDOWN_SECONDS",
+        DEFAULT_ERROR_COOLDOWN_SECONDS,
+        DEFAULT_MIMO_ERROR_COOLDOWN_SECONDS,
+    )
+
+
+def timeout_cooldown_seconds() -> int:
+    default_value = DEFAULT_MIMO_TIMEOUT_COOLDOWN_SECONDS if current_provider() == "mimo" else error_cooldown_seconds()
+    return env_int("ZHUDA_TIMEOUT_COOLDOWN_SECONDS", default_value)
+
+
+def large_prompt_token_threshold() -> int:
+    return provider_env_int(
+        "ZHUDA_LARGE_PROMPT_TOKEN_THRESHOLD",
+        DEFAULT_LARGE_PROMPT_TOKEN_THRESHOLD,
+        DEFAULT_MIMO_LARGE_PROMPT_TOKEN_THRESHOLD,
+    )
+
+
+def large_prompt_min_interval_seconds() -> float:
+    default_ms = int(
+        (
+            DEFAULT_MIMO_LARGE_PROMPT_MIN_INTERVAL_SECONDS
+            if current_provider() == "mimo"
+            else DEFAULT_LARGE_PROMPT_MIN_INTERVAL_SECONDS
+        )
+        * 1000
+    )
+    return env_int("ZHUDA_LARGE_PROMPT_MIN_INTERVAL_MS", default_ms) / 1000
+
+
+def large_prompt_rate_limit_cooldown_seconds() -> int:
+    return provider_env_int(
+        "ZHUDA_LARGE_PROMPT_RATE_LIMIT_COOLDOWN_SECONDS",
+        DEFAULT_LARGE_PROMPT_RATE_LIMIT_COOLDOWN_SECONDS,
+        DEFAULT_MIMO_LARGE_PROMPT_RATE_LIMIT_COOLDOWN_SECONDS,
+    )
+
+
+def cooldown_remaining_seconds(candidates: list[str], key_count: int) -> int:
+    now = time.monotonic()
+    remaining = [
+        int(until - now)
+        for candidate_model in candidates
+        for key_index in range(key_count)
+        for until in [cooldowns.get((candidate_model, key_index), 0)]
+        if until > now
+    ]
+    return max(remaining) if remaining else 0
+
+
 def upstream_model_candidates(model: str) -> list[str]:
     load_dotenv()
     forced = forced_upstream_model()
@@ -800,7 +910,7 @@ def stringify_tool_output(output: Any) -> str:
         except TypeError:
             text = str(output)
     text = sanitize_large_blobs(text)
-    max_chars = env_int("ZHUDA_MAX_TOOL_OUTPUT_CHARS", DEFAULT_MAX_TOOL_OUTPUT_CHARS)
+    max_chars = max_tool_output_chars_limit()
     if len(text) > max_chars:
         head = text[: max_chars // 2]
         tail = text[-(max_chars // 2):]
@@ -1421,7 +1531,7 @@ def extract_gemini_image_parts(payload: dict[str, Any], prompt_tokens_estimate: 
     if not recent_visual_intent(payload, lookback_items):
         return []
 
-    large_prompt_threshold = env_int("ZHUDA_LARGE_PROMPT_TOKEN_THRESHOLD", DEFAULT_LARGE_PROMPT_TOKEN_THRESHOLD)
+    large_prompt_threshold = large_prompt_token_threshold()
     if prompt_tokens_estimate >= large_prompt_threshold:
         max_images = min(
             max_images,
@@ -1767,9 +1877,9 @@ def extract_input_text(payload: dict[str, Any]) -> str:
     if not chunks:
         return "Reply OK only."
 
-    max_tokens = env_int("ZHUDA_MAX_INPUT_TOKENS", DEFAULT_MAX_INPUT_TOKENS)
-    pinned_budget = min(env_int("ZHUDA_MAX_PINNED_TOKENS", DEFAULT_MAX_PINNED_TOKENS), max(2048, max_tokens // 3))
-    item_budget = env_int("ZHUDA_MAX_HISTORY_ITEM_TOKENS", DEFAULT_MAX_HISTORY_ITEM_TOKENS)
+    max_tokens = max_input_tokens_limit()
+    pinned_budget = min(max_pinned_tokens_limit(), max(2048, max_tokens // 3))
+    item_budget = max_history_item_tokens_limit()
 
     before_text = "\n\n".join(chunks)
     before_tokens = estimate_tokens(before_text)
@@ -2052,7 +2162,7 @@ async def call_gemini(
         content_parts.extend(image_parts)
     system_instruction = gemini_system_instruction(declarations or [], len(image_parts))
     prompt_tokens_estimate = estimate_tokens(system_instruction + "\n\n" + prompt)
-    large_prompt_threshold = env_int("ZHUDA_LARGE_PROMPT_TOKEN_THRESHOLD", DEFAULT_LARGE_PROMPT_TOKEN_THRESHOLD)
+    large_prompt_threshold = large_prompt_token_threshold()
     is_large_prompt = prompt_tokens_estimate >= large_prompt_threshold
     content_parts.append({"text": prompt})
     body = {
@@ -2081,22 +2191,17 @@ async def call_gemini(
             max_model_attempts,
             env_int("ZHUDA_LARGE_PROMPT_MAX_MODEL_ATTEMPTS", DEFAULT_LARGE_PROMPT_MAX_MODEL_ATTEMPTS),
         )
-    rate_limit_cooldown = env_int("ZHUDA_RATE_LIMIT_COOLDOWN_SECONDS", DEFAULT_RATE_LIMIT_COOLDOWN_SECONDS)
-    large_prompt_rate_limit_cooldown = env_int(
-        "ZHUDA_LARGE_PROMPT_RATE_LIMIT_COOLDOWN_SECONDS",
-        DEFAULT_LARGE_PROMPT_RATE_LIMIT_COOLDOWN_SECONDS,
-    )
-    error_cooldown = env_int("ZHUDA_ERROR_COOLDOWN_SECONDS", DEFAULT_ERROR_COOLDOWN_SECONDS)
+    rate_limit_cooldown = rate_limit_cooldown_seconds()
+    large_prompt_rate_limit_cooldown = large_prompt_rate_limit_cooldown_seconds()
+    error_cooldown = error_cooldown_seconds()
+    timeout_cooldown = timeout_cooldown_seconds()
     min_interval = env_int("ZHUDA_GLOBAL_MIN_INTERVAL_MS", int(DEFAULT_GLOBAL_MIN_INTERVAL_SECONDS * 1000)) / 1000
-    large_prompt_min_interval = env_int(
-        "ZHUDA_LARGE_PROMPT_MIN_INTERVAL_MS",
-        int(DEFAULT_LARGE_PROMPT_MIN_INTERVAL_SECONDS * 1000),
-    ) / 1000
+    large_prompt_min_interval = large_prompt_min_interval_seconds()
     candidates = upstream_model_candidates(model)[:max(1, max_model_attempts)]
     attempted = 0
     skipped_cooldown = 0
 
-    upstream_timeout = env_int("ZHUDA_UPSTREAM_TIMEOUT_SECONDS", DEFAULT_UPSTREAM_TIMEOUT_SECONDS)
+    upstream_timeout = upstream_timeout_seconds()
     async with upstream_state_lock:
         async with httpx.AsyncClient(timeout=upstream_timeout) as client:
             for candidate_model in candidates:
@@ -2133,7 +2238,7 @@ async def call_gemini(
                         error_text = f"{candidate_model}:key_{key_index + 1}:timeout_after_{upstream_timeout}s:{error}"
                         errors.append(error_text)
                         log_pool_attempt(candidate_model, key_index + 1, 0, False, error_text)
-                        cooldowns[cooldown_key] = time.monotonic() + error_cooldown
+                        cooldowns[cooldown_key] = time.monotonic() + timeout_cooldown
                         continue
                     except httpx.HTTPError as error:
                         error_text = f"{candidate_model}:key_{key_index + 1}:http_error:{type(error).__name__}:{error}"
@@ -2180,6 +2285,15 @@ async def call_gemini(
                         break
 
     log_pool_summary(model, attempted, skipped_cooldown, errors)
+    if attempted == 0 and skipped_cooldown:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error": "gemini_cooling_down",
+                "cooldownSeconds": cooldown_remaining_seconds(candidates, len(keys)),
+                "details": errors[-3:],
+            },
+        )
     raise HTTPException(status_code=502, detail={"error": "gemini_pool_failed", "details": errors[-3:]})
 
 
@@ -2410,7 +2524,7 @@ async def call_mimo(
     image_parts = image_parts or []
     system_instruction = mimo_system_instruction(declarations or [], len(image_parts))
     prompt_tokens_estimate = estimate_tokens(system_instruction + "\n\n" + prompt)
-    large_prompt_threshold = env_int("ZHUDA_LARGE_PROMPT_TOKEN_THRESHOLD", DEFAULT_LARGE_PROMPT_TOKEN_THRESHOLD)
+    large_prompt_threshold = large_prompt_token_threshold()
     is_large_prompt = prompt_tokens_estimate >= large_prompt_threshold
 
     max_key_attempts = min(len(keys), env_int("ZHUDA_MAX_KEY_ATTEMPTS", DEFAULT_MAX_KEY_ATTEMPTS))
@@ -2420,21 +2534,16 @@ async def call_mimo(
             max_model_attempts,
             env_int("ZHUDA_LARGE_PROMPT_MAX_MODEL_ATTEMPTS", DEFAULT_LARGE_PROMPT_MAX_MODEL_ATTEMPTS),
         )
-    rate_limit_cooldown = env_int("ZHUDA_RATE_LIMIT_COOLDOWN_SECONDS", DEFAULT_RATE_LIMIT_COOLDOWN_SECONDS)
-    large_prompt_rate_limit_cooldown = env_int(
-        "ZHUDA_LARGE_PROMPT_RATE_LIMIT_COOLDOWN_SECONDS",
-        DEFAULT_LARGE_PROMPT_RATE_LIMIT_COOLDOWN_SECONDS,
-    )
-    error_cooldown = env_int("ZHUDA_ERROR_COOLDOWN_SECONDS", DEFAULT_ERROR_COOLDOWN_SECONDS)
+    rate_limit_cooldown = rate_limit_cooldown_seconds()
+    large_prompt_rate_limit_cooldown = large_prompt_rate_limit_cooldown_seconds()
+    error_cooldown = error_cooldown_seconds()
+    timeout_cooldown = timeout_cooldown_seconds()
     min_interval = env_int("ZHUDA_GLOBAL_MIN_INTERVAL_MS", int(DEFAULT_GLOBAL_MIN_INTERVAL_SECONDS * 1000)) / 1000
-    large_prompt_min_interval = env_int(
-        "ZHUDA_LARGE_PROMPT_MIN_INTERVAL_MS",
-        int(DEFAULT_LARGE_PROMPT_MIN_INTERVAL_SECONDS * 1000),
-    ) / 1000
+    large_prompt_min_interval = large_prompt_min_interval_seconds()
     candidates = upstream_model_candidates(model)[:max(1, max_model_attempts)]
     attempted = 0
     skipped_cooldown = 0
-    upstream_timeout = env_int("ZHUDA_UPSTREAM_TIMEOUT_SECONDS", DEFAULT_UPSTREAM_TIMEOUT_SECONDS)
+    upstream_timeout = upstream_timeout_seconds()
     base_url = mimo_base_url()
     enable_tools = env_bool("ZHUDA_MIMO_ENABLE_TOOLS", False)
 
@@ -2475,7 +2584,7 @@ async def call_mimo(
                         ],
                         "stream": False,
                         "temperature": 0.2,
-                        "max_tokens": env_int("ZHUDA_MIMO_MAX_TOKENS", 2048),
+                        "max_tokens": env_int("ZHUDA_MIMO_MAX_TOKENS", DEFAULT_MIMO_MAX_OUTPUT_TOKENS),
                     }
                     if enable_tools and declarations:
                         body["tools"] = [
@@ -2500,7 +2609,7 @@ async def call_mimo(
                         error_text = f"{candidate_model}:key_{key_index + 1}:timeout_after_{upstream_timeout}s:{error}"
                         errors.append(error_text)
                         log_pool_attempt(candidate_model, key_index + 1, 0, False, error_text)
-                        cooldowns[cooldown_key] = time.monotonic() + error_cooldown
+                        cooldowns[cooldown_key] = time.monotonic() + timeout_cooldown
                         continue
                     except httpx.HTTPError as error:
                         error_text = f"{candidate_model}:key_{key_index + 1}:http_error:{type(error).__name__}:{error}"
@@ -2544,11 +2653,20 @@ async def call_mimo(
                         cooldowns[cooldown_key] = time.monotonic() + cooldown
                         continue
                     if response.status_code in {500, 502, 503, 504}:
-                        cooldowns[cooldown_key] = time.monotonic() + error_cooldown
+                        cooldowns[cooldown_key] = time.monotonic() + max(error_cooldown, timeout_cooldown)
                     if response.status_code not in RETRYABLE_UPSTREAM_STATUSES:
                         break
 
     log_pool_summary(model, attempted, skipped_cooldown, errors)
+    if attempted == 0 and skipped_cooldown:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error": "mimo_cooling_down",
+                "cooldownSeconds": cooldown_remaining_seconds(candidates, len(keys)),
+                "details": errors[-3:],
+            },
+        )
     raise HTTPException(status_code=502, detail={"error": "mimo_pool_failed", "details": errors[-3:]})
 
 
@@ -2644,6 +2762,8 @@ def visible_error_text(
     detail_text = "\n".join(details)
     status_codes = sorted(set(re.findall(r":([1-5][0-9]{2}):", detail_text)))
     status_summary = ", ".join(status_codes) if status_codes else str(getattr(error, "status_code", "unknown"))
+    detail_error = str(detail.get("error", "")) if isinstance(detail, dict) else ""
+    timeout_match = re.search(r"timeout_after_(\d+)s", detail_text)
     if "mimo_content_missing" in detail_text:
         reason = "empty or unsupported upstream response"
         status_summary = "200 (empty/unsupported content)"
@@ -2652,21 +2772,50 @@ def visible_error_text(
             "The adapter now parses more OpenAI-like fields and trims large tool outputs more aggressively; "
             "retry this turn after relaunching the adapter."
         )
+    elif detail_error.endswith("_cooling_down"):
+        reason = "adapter cooldown after recent upstream failure"
+        status_summary = "cooldown"
+        cooldown_seconds = detail.get("cooldownSeconds") if isinstance(detail, dict) else None
+        cooldown_text = f"約 {cooldown_seconds} 秒" if isinstance(cooldown_seconds, int) and cooldown_seconds > 0 else "短暫"
+        suggestion = (
+            f"上游剛剛失敗，adapter 這輪沒有再燒請求，而是進入 {cooldown_text} 冷卻。"
+            "稍等後重試，或切到另一個模型。"
+        )
     elif "gemini_upstream_timeout" in str(detail) or "timeout_after" in detail_text:
         reason = "upstream timeout"
-        timeout_seconds = None
+        status_summary = "timeout"
+        timeout_seconds: Optional[int] = None
         if isinstance(detail, dict):
             timeout_seconds = detail.get("timeoutSeconds")
-        suggestion = (
-            f"上游呼叫超過 {timeout_seconds or DEFAULT_UPSTREAM_TIMEOUT_SECONDS} 秒沒有完成，"
-            "adapter 已改成正常結束這輪，避免 Codex 一直卡在「正在思考」。"
-        )
+        if timeout_seconds is None and timeout_match:
+            try:
+                timeout_seconds = int(timeout_match.group(1))
+            except ValueError:
+                timeout_seconds = None
+        timeout_seconds = timeout_seconds or upstream_timeout_seconds()
+        if current_provider() == "mimo":
+            suggestion = (
+                f"MiMo 上游超過 {timeout_seconds} 秒沒有完成；這通常不是餘額不足，而是長上下文、工具歷史或上游擁塞。"
+                "adapter 已正常結束這輪並進入冷卻，避免 Codex 一直卡在「正在思考」。"
+                "如果同一任務連續發生，先 /compact 或切 MiMo v2.5 再試。"
+            )
+        else:
+            suggestion = (
+                f"上游呼叫超過 {timeout_seconds} 秒沒有完成，"
+                "adapter 已改成正常結束這輪，避免 Codex 一直卡在「正在思考」。"
+            )
     elif "input token count exceeds" in detail_text.lower() or "gemini_input_too_large" in str(detail):
         reason = "input context too large"
         suggestion = "Start a new chat or use /compact if the current thread has grown too large."
+    elif "401" in status_codes:
+        reason = "API key rejected"
+        suggestion = "The upstream rejected this API key. Reopen the launcher, paste a fresh key, and activate the provider again."
+    elif "400" in status_codes:
+        reason = "bad upstream request"
+        suggestion = "The provider rejected the request format. The adapter logs include the upstream body for debugging."
     elif "429" in status_codes or "quota" in detail_text.lower():
         reason = "quota/rate limit exhausted or burst-limited"
-        large_prompt_threshold = env_int("ZHUDA_LARGE_PROMPT_TOKEN_THRESHOLD", DEFAULT_LARGE_PROMPT_TOKEN_THRESHOLD)
+        large_prompt_threshold = large_prompt_token_threshold()
         if prompt_tokens_estimate >= large_prompt_threshold:
             image_note = f", with {image_part_count} inline image(s)" if image_part_count else ""
             suggestion = (
@@ -2676,6 +2825,12 @@ def visible_error_text(
             )
         else:
             suggestion = "Wait for the cooldown window, then retry. The adapter now limits retries and slows model calls to avoid burning the whole key pool."
+    elif current_provider() == "mimo" and any(code in status_codes for code in ("500", "502", "503", "504")):
+        reason = "MiMo gateway/server error"
+        suggestion = (
+            "MiMo 上游回了 5xx，這通常和餘額無關，比較像供應商 gateway、模型忙碌或長上下文處理不穩。"
+            "adapter 已把這類錯誤放入較長冷卻；短暫等待、/compact，或切到 MiMo v2.5 通常比立刻連續重試有效。"
+        )
     else:
         reason = "upstream request failed"
         if forced_upstream_model():
@@ -2966,7 +3121,7 @@ def log_adapter_status() -> dict[str, Any]:
         "keyCount": len(keys),
         "forceUpstreamModel": forced_upstream_model(),
         "nextKeyIndex": (cursor % max(len(keys), 1)) + 1,
-        "upstreamTimeoutSeconds": env_int("ZHUDA_UPSTREAM_TIMEOUT_SECONDS", DEFAULT_UPSTREAM_TIMEOUT_SECONDS),
+        "upstreamTimeoutSeconds": upstream_timeout_seconds(),
         "maxKeyAttempts": env_int("ZHUDA_MAX_KEY_ATTEMPTS", DEFAULT_MAX_KEY_ATTEMPTS),
         "activeCooldowns": active_cooldowns,
     }
@@ -3088,13 +3243,13 @@ async def pool_status():
         "models": model_aliases(),
         "forceUpstreamModel": forced_upstream_model(),
         "runtime": {
-            "maxInputTokens": env_int("ZHUDA_MAX_INPUT_TOKENS", DEFAULT_MAX_INPUT_TOKENS),
-            "maxPinnedTokens": env_int("ZHUDA_MAX_PINNED_TOKENS", DEFAULT_MAX_PINNED_TOKENS),
-            "maxHistoryItemTokens": env_int("ZHUDA_MAX_HISTORY_ITEM_TOKENS", DEFAULT_MAX_HISTORY_ITEM_TOKENS),
-            "maxToolOutputChars": env_int("ZHUDA_MAX_TOOL_OUTPUT_CHARS", DEFAULT_MAX_TOOL_OUTPUT_CHARS),
+            "maxInputTokens": max_input_tokens_limit(),
+            "maxPinnedTokens": max_pinned_tokens_limit(),
+            "maxHistoryItemTokens": max_history_item_tokens_limit(),
+            "maxToolOutputChars": max_tool_output_chars_limit(),
             "maxKeyAttempts": env_int("ZHUDA_MAX_KEY_ATTEMPTS", DEFAULT_MAX_KEY_ATTEMPTS),
             "maxModelAttempts": env_int("ZHUDA_MAX_MODEL_ATTEMPTS", DEFAULT_MAX_MODEL_ATTEMPTS),
-            "upstreamTimeoutSeconds": env_int("ZHUDA_UPSTREAM_TIMEOUT_SECONDS", DEFAULT_UPSTREAM_TIMEOUT_SECONDS),
+            "upstreamTimeoutSeconds": upstream_timeout_seconds(),
             "maxRepeatVisualToolCalls": env_int("ZHUDA_MAX_REPEAT_VISUAL_TOOL_CALLS", DEFAULT_MAX_REPEAT_VISUAL_TOOL_CALLS),
             "maxRepeatToolCalls": env_int("ZHUDA_MAX_REPEAT_TOOL_CALLS", DEFAULT_MAX_REPEAT_TOOL_CALLS),
             "repeatGuardsDisabled": env_bool("ZHUDA_DISABLE_REPEAT_GUARDS"),
@@ -3103,13 +3258,14 @@ async def pool_status():
             "maxInlineImages": env_int("ZHUDA_MAX_INLINE_IMAGES", DEFAULT_MAX_INLINE_IMAGES),
             "maxInlineImageBytes": env_int("ZHUDA_MAX_INLINE_IMAGE_BYTES", DEFAULT_MAX_INLINE_IMAGE_BYTES),
             "maxInlineImageTotalBytes": env_int("ZHUDA_MAX_INLINE_IMAGE_TOTAL_BYTES", DEFAULT_MAX_INLINE_IMAGE_TOTAL_BYTES),
-            "largePromptTokenThreshold": env_int("ZHUDA_LARGE_PROMPT_TOKEN_THRESHOLD", DEFAULT_LARGE_PROMPT_TOKEN_THRESHOLD),
+            "largePromptTokenThreshold": large_prompt_token_threshold(),
             "largePromptMaxInlineImages": env_int("ZHUDA_LARGE_PROMPT_MAX_INLINE_IMAGES", DEFAULT_LARGE_PROMPT_MAX_INLINE_IMAGES),
             "largePromptMaxModelAttempts": env_int("ZHUDA_LARGE_PROMPT_MAX_MODEL_ATTEMPTS", DEFAULT_LARGE_PROMPT_MAX_MODEL_ATTEMPTS),
-            "largePromptMinIntervalMs": env_int("ZHUDA_LARGE_PROMPT_MIN_INTERVAL_MS", int(DEFAULT_LARGE_PROMPT_MIN_INTERVAL_SECONDS * 1000)),
-            "largePromptRateLimitCooldownSeconds": env_int("ZHUDA_LARGE_PROMPT_RATE_LIMIT_COOLDOWN_SECONDS", DEFAULT_LARGE_PROMPT_RATE_LIMIT_COOLDOWN_SECONDS),
-            "rateLimitCooldownSeconds": env_int("ZHUDA_RATE_LIMIT_COOLDOWN_SECONDS", DEFAULT_RATE_LIMIT_COOLDOWN_SECONDS),
-            "errorCooldownSeconds": env_int("ZHUDA_ERROR_COOLDOWN_SECONDS", DEFAULT_ERROR_COOLDOWN_SECONDS),
+            "largePromptMinIntervalMs": int(large_prompt_min_interval_seconds() * 1000),
+            "largePromptRateLimitCooldownSeconds": large_prompt_rate_limit_cooldown_seconds(),
+            "rateLimitCooldownSeconds": rate_limit_cooldown_seconds(),
+            "errorCooldownSeconds": error_cooldown_seconds(),
+            "timeoutCooldownSeconds": timeout_cooldown_seconds(),
             "globalMinIntervalMs": env_int("ZHUDA_GLOBAL_MIN_INTERVAL_MS", int(DEFAULT_GLOBAL_MIN_INTERVAL_SECONDS * 1000)),
             "activeCooldowns": active_cooldowns,
         },

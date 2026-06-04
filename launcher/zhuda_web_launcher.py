@@ -135,10 +135,18 @@ def build_session_env_vars(manifest, provider, mapping_ids, api_key, endpoint_id
         values["XIAOMI_MIMO_API_KEY"] = api_key
         values["MIMO_BASE_URL"] = base_url
         values["XIAOMI_MIMO_BASE_URL"] = base_url
-        values["ZHUDA_MAX_INPUT_TOKENS"] = "16000"
-        values["ZHUDA_MAX_HISTORY_ITEM_TOKENS"] = "1800"
-        values["ZHUDA_MAX_TOOL_OUTPUT_CHARS"] = "1800"
-        values["ZHUDA_MIMO_MAX_TOKENS"] = "4096"
+        values["ZHUDA_MAX_INPUT_TOKENS"] = "12000"
+        values["ZHUDA_MAX_PINNED_TOKENS"] = "3500"
+        values["ZHUDA_MAX_HISTORY_ITEM_TOKENS"] = "1200"
+        values["ZHUDA_MAX_TOOL_OUTPUT_CHARS"] = "1200"
+        values["ZHUDA_MIMO_MAX_TOKENS"] = "2048"
+        values["ZHUDA_UPSTREAM_TIMEOUT_SECONDS"] = "90"
+        values["ZHUDA_TIMEOUT_COOLDOWN_SECONDS"] = "90"
+        values["ZHUDA_ERROR_COOLDOWN_SECONDS"] = "45"
+        values["ZHUDA_LARGE_PROMPT_TOKEN_THRESHOLD"] = "12000"
+        values["ZHUDA_LARGE_PROMPT_MIN_INTERVAL_MS"] = "25000"
+        values["ZHUDA_LARGE_PROMPT_RATE_LIMIT_COOLDOWN_SECONDS"] = "180"
+        values["ZHUDA_MODEL_MIN_INTERVALS_MS"] = "mimo-v2.5-pro:12000,mimo-v2.5:8000"
     return values
 
 

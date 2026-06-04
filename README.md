@@ -126,6 +126,12 @@ node -c launcher/web/app.js
 python3 -m json.tool providers.json >/dev/null
 ```
 
+Run adapter boundary checks without calling any provider API:
+
+```bash
+python3 tests/test_adapter_boundaries.py
+```
+
 Run a source-only sensitive scan:
 
 ```bash
@@ -142,5 +148,6 @@ Expected result: only documentation, placeholder hints, redaction regexes, or en
 ## Notes
 
 - Do not override an existing paid Codex setup globally unless you intend to. Zhuda-Codex is designed to run as a separate local provider route.
+- MiMo 5xx or timeout messages are usually provider gateway/model latency issues, not a balance signal by themselves. The launcher uses smaller MiMo context budgets, longer timeout cooldowns, and lower output limits to avoid repeated failed long-context turns.
 - Brand images under `assets/brand/` are generated Zhuda/ZhuEr derivatives. Only publish or redistribute assets you have rights to use.
 - This project is a local adapter/launcher experiment, not an official OpenAI, Google, or Xiaomi product.

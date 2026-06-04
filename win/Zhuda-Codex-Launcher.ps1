@@ -203,10 +203,18 @@ function Start-ZhudaCodexMappings {
         $launchEnv["MIMO_API_KEY_1"] = $sessionKey
         $launchEnv["MIMO_API_KEY"] = $sessionKey
         $launchEnv["XIAOMI_MIMO_API_KEY"] = $sessionKey
-        $launchEnv["ZHUDA_MAX_INPUT_TOKENS"] = "16000"
-        $launchEnv["ZHUDA_MAX_HISTORY_ITEM_TOKENS"] = "1800"
-        $launchEnv["ZHUDA_MAX_TOOL_OUTPUT_CHARS"] = "1800"
-        $launchEnv["ZHUDA_MIMO_MAX_TOKENS"] = "4096"
+        $launchEnv["ZHUDA_MAX_INPUT_TOKENS"] = "12000"
+        $launchEnv["ZHUDA_MAX_PINNED_TOKENS"] = "3500"
+        $launchEnv["ZHUDA_MAX_HISTORY_ITEM_TOKENS"] = "1200"
+        $launchEnv["ZHUDA_MAX_TOOL_OUTPUT_CHARS"] = "1200"
+        $launchEnv["ZHUDA_MIMO_MAX_TOKENS"] = "2048"
+        $launchEnv["ZHUDA_UPSTREAM_TIMEOUT_SECONDS"] = "90"
+        $launchEnv["ZHUDA_TIMEOUT_COOLDOWN_SECONDS"] = "90"
+        $launchEnv["ZHUDA_ERROR_COOLDOWN_SECONDS"] = "45"
+        $launchEnv["ZHUDA_LARGE_PROMPT_TOKEN_THRESHOLD"] = "12000"
+        $launchEnv["ZHUDA_LARGE_PROMPT_MIN_INTERVAL_MS"] = "25000"
+        $launchEnv["ZHUDA_LARGE_PROMPT_RATE_LIMIT_COOLDOWN_SECONDS"] = "180"
+        $launchEnv["ZHUDA_MODEL_MIN_INTERVALS_MS"] = "mimo-v2.5-pro:12000,mimo-v2.5:8000"
         $baseUrl = [string]$env:ZHUDA_WEB_LAUNCH_BASE_URL
         if (-not $baseUrl) { $baseUrl = Get-JsonProperty $ProviderObject "base_url" "" }
         if ($baseUrl) {
