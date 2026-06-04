@@ -256,6 +256,83 @@ function Start-ModelInjector {
     ) -WindowStyle Hidden -RedirectStandardOutput $ModelInjectorLogPath -RedirectStandardError $ModelInjectorErrPath | Out-Null
 }
 
+function Get-UniqueCsvItems {
+    param([string]$Text)
+    $seen = @{}
+    $out = New-Object System.Collections.Generic.List[string]
+    foreach ($item in ($Text -split ",")) {
+        $value = $item.Trim()
+        if ($value -and -not $seen.ContainsKey($value)) {
+            $seen[$value] = $true
+            $out.Add($value) | Out-Null
+        }
+    }
+    return @($out.ToArray())
+}
+
+function New-ZhudaModelDescriptor {
+    param([string]$Name, [int]$Priority, [string]$ProviderName)
+    return [ordered]@{
+        slug = $Name
+        display_name = $Name
+        description = "$ProviderName upstream model"
+        default_reasoning_level = "medium"
+        supported_reasoning_levels = @(
+            [ordered]@{ effort = "low"; description = "Fast responses" },
+            [ordered]@{ effort = "medium"; description = "Balanced reasoning" },
+            [ordered]@{ effort = "high"; description = "More deliberate reasoning" },
+            [ordered]@{ effort = "xhigh"; description = "Maximum reasoning" }
+        )
+        shell_type = "shell_command"
+        visibility = "list"
+        supported_in_api = $true
+        priority = $Priority
+        additional_speed_tiers = @()
+        service_tiers = @()
+        availability_nux = $null
+        upgrade = $null
+        base_instructions = "You are Codex, a coding agent."
+        supports_reasoning_summaries = $false
+        default_reasoning_summary = "auto"
+        support_verbosity = $false
+        default_verbosity = $null
+        apply_patch_tool_type = $null
+        web_search_tool_type = "text"
+        truncation_policy = [ordered]@{ mode = "tokens"; limit = 10000 }
+        supports_parallel_tool_calls = $false
+        supports_image_detail_original = $false
+        effective_context_window_percent = 95
+        experimental_supported_tools = @()
+        input_modalities = @("text", "image")
+        supports_search_tool = $false
+    }
+}
+
+function Write-ModelCache {
+    param([string]$SelectedModel)
+    $modelsText = [string]$env:ZHUDA_VISIBLE_MODELS
+    if (-not $modelsText) { $modelsText = $SelectedModel }
+    $models = @(Get-UniqueCsvItems $modelsText)
+    if ($SelectedModel -and -not ($models -contains $SelectedModel)) {
+        $models = @($SelectedModel) + $models
+    }
+    if ($models.Count -le 0) { return }
+
+    $providerName = [string]$env:ZHUDA_PROVIDER
+    if (-not $providerName) { $providerName = "Zhuda-Codex" }
+    $items = @()
+    for ($i = 0; $i -lt $models.Count; $i++) {
+        $items += New-ZhudaModelDescriptor ([string]$models[$i]) (9 + ($i * 7)) $providerName
+    }
+    $payload = [ordered]@{
+        fetched_at = [DateTime]::UtcNow.ToString("o")
+        etag = "zhuda-$providerName"
+        client_version = "zhuda-local"
+        models = $items
+    }
+    Write-Utf8NoBom (Join-Path $CodexHome "models_cache.json") ($payload | ConvertTo-Json -Depth 30)
+}
+
 Ensure-Dir $ProfileRoot
 Ensure-Dir $CodexHome
 Ensure-Dir $AppData
@@ -288,12 +365,14 @@ experimental_bearer_token = "zhuda-codex-local-token"
 sandbox = "unelevated"
 "@
 Write-Utf8NoBom (Join-Path $CodexHome "config.toml") $config
+Write-ModelCache $codexModel
 
 if ($DryRun) {
     Write-Output "root=$Root"
     Write-Output "app=$AppExe"
     Write-Output "profile=$ProfileRoot"
     Write-Output "codex_home=$CodexHome"
+    Write-Output "model_cache=$(Join-Path $CodexHome 'models_cache.json')"
     Write-Output "model=$Model"
     Write-Output "codex_model=$codexModel"
     Write-Output "adapter=$Adapter"
