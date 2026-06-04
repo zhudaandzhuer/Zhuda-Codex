@@ -92,10 +92,15 @@ function Get-DefaultProvider {
 
 function Get-ModelById {
     param($ProviderObject, [string]$Id)
-    $models = @($ProviderObject.models)
+    $models = Get-UpstreamModels $ProviderObject
     if ($Id) {
-        $found = @($models | Where-Object { $_.id -eq $Id -or $_.codex_slug -eq $Id -or $_.upstream -eq $Id } | Select-Object -First 1)
+        $found = @($models | Where-Object { $_.id -eq $Id -or $_.upstream -eq $Id -or $_.label -eq $Id } | Select-Object -First 1)
         if ($found.Count -gt 0) { return $found[0] }
+    }
+    $defaultId = [string](Get-JsonProperty $ProviderObject "default_model" "")
+    if ($defaultId) {
+        $default = @($models | Where-Object { $_.id -eq $defaultId -or $_.upstream -eq $defaultId } | Select-Object -First 1)
+        if ($default.Count -gt 0) { return $default[0] }
     }
     $default = @($models | Where-Object { [bool](Get-JsonProperty $_ "default" $false) } | Select-Object -First 1)
     if ($default.Count -gt 0) { return $default[0] }
@@ -401,9 +406,9 @@ if ($Headless -or ($Provider -and $Model -and $ApiKey)) {
     $effectiveApiKey = if ($ApiKey) { $ApiKey } else { [string]$env:ZHUDA_WEB_LAUNCH_API_KEY }
     $mappingPayload = $env:ZHUDA_WEB_LAUNCH_MAPPINGS
     if (-not $mappingPayload) {
-        $models = Get-UpstreamModels $p
-        $first = if (@($models).Count -gt 0) { [string]$models[0].upstream } else { "" }
-        $mappingPayload = (@{ "zhuda-codex" = $first } | ConvertTo-Json -Compress)
+        $modelObject = Get-ModelById $p $Model
+        $upstream = if ($modelObject -and $modelObject.upstream) { [string]$modelObject.upstream } else { "" }
+        $mappingPayload = (@{ "zhuda-codex" = $upstream } | ConvertTo-Json -Compress)
     }
     $mappingTable = Convert-MappingsObjectToHashtable $mappingPayload
     $ctx = Apply-And-LaunchMappings $p $mappingTable $effectiveApiKey
