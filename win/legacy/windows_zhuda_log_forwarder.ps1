@@ -138,7 +138,7 @@ function New-Snapshot {
     $files = New-Object System.Collections.ArrayList
     Add-FileItem $files "codex-config" (Join-Path $env:USERPROFILE ".codex\config.toml")
     Add-FileItem $files "codex-config-backup" (Join-Path $env:USERPROFILE ".codex\config.toml.before-zhuda-local")
-    foreach ($name in @("adapter.episodes.jsonl", "adapter.pool.jsonl", "adapter.requests.jsonl", "adapter.err.log")) {
+    foreach ($name in @("adapter.episodes.jsonl", "adapter.pool.jsonl", "adapter.requests.jsonl", "adapter.err.log", "model-injector.log", "model-injector.err.log")) {
         Add-FileItem $files "zhuda-win-$name" (Join-Path $RuntimeDir $name)
     }
     foreach ($file in (Find-RecentLogFiles)) {

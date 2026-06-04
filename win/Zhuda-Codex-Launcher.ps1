@@ -211,6 +211,10 @@ function Start-ZhudaCodexMappings {
         ZHUDA_FORCE_UPSTREAM_MODEL = "0"
         ZHUDA_CODEX_LAUNCHER_SESSION = [DateTime]::UtcNow.ToString("o")
     }
+    $injectorPath = Join-Path $ScriptRoot "zhuda_model_injector.ps1"
+    if (Test-Path $injectorPath) {
+        $launchEnv["ZHUDA_MODEL_INJECTOR_PATH"] = $injectorPath
+    }
     if ($ProviderObject.id -eq "mimo") {
         $launchEnv["MIMO_API_KEY_1"] = $sessionKey
         $launchEnv["MIMO_API_KEY"] = $sessionKey

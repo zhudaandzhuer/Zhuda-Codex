@@ -32,7 +32,10 @@ $ModelCachePath = Join-Path $ConfigDir "models_cache.json"
 $ModelCacheBackupPath = Join-Path $ConfigDir "models_cache.json.before-zhuda-local"
 $LocalModeMarkerPath = Join-Path $RuntimeDir "local-mode.enabled"
 $RateProfilePath = Join-Path $RuntimeDir "rate_profile.txt"
+$ModelInjectorPath = Join-Path $RuntimeDir "zhuda_model_injector.ps1"
+$ModelInjectorLogPath = Join-Path $RuntimeDir "model-injector.log"
 $Port = 4000
+$DefaultCdpPort = 9233
 $BaseUrl = "http://127.0.0.1:$Port"
 $LocalBearer = "zhuda-codex-local-token"
 $DefaultGeminiApiKey = ""
@@ -1504,6 +1507,54 @@ function Test-PortOpen {
     }
 }
 
+function Test-TcpPortOpen {
+    param([int]$TcpPort)
+    try {
+        $client = New-Object System.Net.Sockets.TcpClient
+        $iar = $client.BeginConnect("127.0.0.1", $TcpPort, $null, $null)
+        $ok = $iar.AsyncWaitHandle.WaitOne(250, $false)
+        if ($ok) { $client.EndConnect($iar) }
+        $client.Close()
+        return $ok
+    } catch {
+        return $false
+    }
+}
+
+function Get-FreeCdpPort {
+    $port = $DefaultCdpPort
+    while (Test-TcpPortOpen $port) {
+        $port += 1
+        if ($port -gt ($DefaultCdpPort + 80)) { return $DefaultCdpPort }
+    }
+    return $port
+}
+
+function Join-CommandLine {
+    param([string[]]$Items)
+    $quoted = @()
+    foreach ($item in $Items) {
+        if ($null -eq $item) { $item = "" }
+        $quoted += '"' + ([string]$item).Replace('"', '\"') + '"'
+    }
+    return ($quoted -join " ")
+}
+
+function Start-DetachedProcess {
+    param(
+        [string]$FilePath,
+        [string[]]$ArgumentList = @(),
+        [int]$WindowStyle = 0
+    )
+    $commandLine = Join-CommandLine (@($FilePath) + @($ArgumentList))
+    try {
+        $shell = New-Object -ComObject WScript.Shell
+        [void]$shell.Run($commandLine, $WindowStyle, $false)
+    } catch {
+        Start-Process -FilePath $FilePath -ArgumentList $ArgumentList -WindowStyle Hidden | Out-Null
+    }
+}
+
 function Start-LocalServer {
     Ensure-Runtime
     if (Test-Server) {
@@ -1516,8 +1567,8 @@ function Start-LocalServer {
     }
     $ps = (Get-Process -Id $PID).Path
     if (-not $ps) { $ps = "powershell.exe" }
-    $args = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "`"$ScriptPath`"", "-Server", "-Model", "`"$GeminiModel`"")
-    Start-Process -FilePath $ps -ArgumentList $args -WindowStyle Hidden | Out-Null
+    $args = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $ScriptPath, "-Server", "-Model", $GeminiModel)
+    Start-DetachedProcess -FilePath $ps -ArgumentList $args
     for ($i = 0; $i -lt 30; $i++) {
         Start-Sleep -Milliseconds 300
         if (Test-Server) {
@@ -1878,12 +1929,53 @@ function Get-CodexExeCandidate {
     return $null
 }
 
+function Get-ModelInjectorCandidate {
+    $envPath = [Environment]::GetEnvironmentVariable("ZHUDA_MODEL_INJECTOR_PATH", "Process")
+    foreach ($path in @(
+        $envPath,
+        $ModelInjectorPath,
+        (Join-Path (Split-Path -Parent $ScriptPath) "zhuda_model_injector.ps1"),
+        (Join-Path (Split-Path -Parent (Split-Path -Parent $ScriptPath)) "zhuda_model_injector.ps1")
+    )) {
+        if ($path -and (Test-Path $path)) { return (Resolve-Path $path).Path }
+    }
+    return ""
+}
+
+function Start-ModelInjector {
+    param([int]$CdpPort)
+    $injector = Get-ModelInjectorCandidate
+    if (-not $injector) {
+        Write-ErrorLog "Model injector script not found."
+        return
+    }
+    $models = (Get-VisibleModelNames) -join ","
+    if (-not $models) { return }
+    $providerName = if ($Provider -eq "mimo") { "Xiaomi MiMo" } else { "Gemini" }
+    $ps = (Get-Process -Id $PID).Path
+    if (-not $ps) { $ps = "powershell.exe" }
+    $errPath = Join-Path $RuntimeDir "model-injector.err.log"
+    $args = @(
+        "-NoProfile",
+        "-ExecutionPolicy", "Bypass",
+        "-File", $injector,
+        "-Port", "$CdpPort",
+        "-Models", $models,
+        "-DefaultModel", $GeminiModel,
+        "-ProviderName", $providerName,
+        "-DurationSeconds", "25"
+    )
+    Start-Process -FilePath $ps -ArgumentList $args -WindowStyle Hidden -RedirectStandardOutput $ModelInjectorLogPath -RedirectStandardError $errPath | Out-Null
+}
+
 function Restart-Codex {
     $exe = Get-CodexExeCandidate
     Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.ProcessName -match '^Codex$|^codex$' } | Stop-Process -Force -ErrorAction SilentlyContinue
     Start-Sleep -Seconds 1
     if ($exe -and (Test-Path $exe)) {
-        Start-Process $exe | Out-Null
+        $cdpPort = Get-FreeCdpPort
+        Start-DetachedProcess -FilePath $exe -ArgumentList @("--remote-debugging-address=127.0.0.1", "--remote-debugging-port=$cdpPort") -WindowStyle 1
+        Start-ModelInjector $cdpPort
         Write-Host "Codex restarted." -ForegroundColor Green
     } else {
         Write-Host "Codex config changed. Please reopen Codex Desktop manually." -ForegroundColor Yellow

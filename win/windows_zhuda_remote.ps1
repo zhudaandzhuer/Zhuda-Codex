@@ -146,7 +146,7 @@ function New-Snapshot {
     $files = New-Object System.Collections.ArrayList
     Add-FileItem $files "codex-config" (Join-Path $env:USERPROFILE ".codex\config.toml")
     Add-FileItem $files "codex-config-backup" (Join-Path $env:USERPROFILE ".codex\config.toml.before-zhuda-local")
-    foreach ($name in @("adapter.episodes.jsonl", "adapter.pool.jsonl", "adapter.requests.jsonl", "adapter.err.log")) {
+    foreach ($name in @("adapter.episodes.jsonl", "adapter.pool.jsonl", "adapter.requests.jsonl", "adapter.err.log", "model-injector.log", "model-injector.err.log")) {
         Add-FileItem $files "zhuda-win-$name" (Join-Path $RuntimeDir $name)
     }
     foreach ($file in (Find-RecentLogFiles)) {
@@ -196,6 +196,26 @@ function Write-Utf8Bom {
     param([string]$Path, [string]$Text)
     $enc = New-Object System.Text.UTF8Encoding($true)
     [System.IO.File]::WriteAllText($Path, $Text, $enc)
+}
+
+function Read-SharedText {
+    param([string]$Path)
+    if (-not (Test-Path $Path)) { return "" }
+    $stream = $null
+    try {
+        $stream = [System.IO.File]::Open($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+        $reader = New-Object System.IO.StreamReader($stream, [System.Text.Encoding]::UTF8, $true)
+        try {
+            return $reader.ReadToEnd()
+        } finally {
+            $reader.Dispose()
+            $stream = $null
+        }
+    } catch {
+        return "read_error: $($_.Exception.Message)"
+    } finally {
+        if ($stream) { $stream.Dispose() }
+    }
 }
 
 function Invoke-RemoteCommand {
@@ -266,8 +286,8 @@ function Invoke-RemoteCommand {
             }
             $result.exit_code = $exitCode
         }
-        if (Test-Path $outPath) { $result.stdout = Trim-Text (Redact-Secret ([System.IO.File]::ReadAllText($outPath))) $MaxOutputChars }
-        if (Test-Path $errPath) { $result.stderr = Trim-Text (Redact-Secret ([System.IO.File]::ReadAllText($errPath))) $MaxOutputChars }
+        if (Test-Path $outPath) { $result.stdout = Trim-Text (Redact-Secret (Read-SharedText $outPath)) $MaxOutputChars }
+        if (Test-Path $errPath) { $result.stderr = Trim-Text (Redact-Secret (Read-SharedText $errPath)) $MaxOutputChars }
         if ($null -eq $result.exit_code -and -not $result.error) { $result.exit_code = 0 }
         $result.ok = (-not $result.error -and [int]$result.exit_code -eq 0)
     } catch {

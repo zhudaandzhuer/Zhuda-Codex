@@ -81,6 +81,7 @@ function Main {
     $url = Resolve-ReceiverUrl
     $remoteScript = Join-Path $RuntimeDir "windows_zhuda_remote.ps1"
     $adapterScript = Join-Path $RuntimeDir "windows_zhuda_local_adapter.ps1"
+    $injectorScript = Join-Path $RuntimeDir "zhuda_model_injector.ps1"
     $connectPath = Join-Path $RuntimeDir "windows_zhuda_connect.ps1"
     $providersPath = Join-Path $RuntimeDir "providers.json"
     $launcherScript = Join-Path $RuntimeDir "Zhuda-Codex-Launcher.ps1"
@@ -94,6 +95,7 @@ function Main {
     New-Item -ItemType Directory -Force -Path $launcherWebDir | Out-Null
     Download-File "$url/download/windows_zhuda_remote.ps1" $remoteScript
     Download-File "$url/download/windows_zhuda_local_adapter.ps1" $adapterScript
+    Download-File "$url/download/zhuda_model_injector.ps1" $injectorScript
     Download-File "$url/download/windows_zhuda_connect.ps1" $connectPath
     Download-File "$url/download/providers.json" $providersPath
     Download-File "$url/download/Zhuda-Codex-Launcher.ps1" $launcherScript

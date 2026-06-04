@@ -117,12 +117,15 @@ $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $AppExe = Join-Path $Root "app\Codex.exe"
 $ToolsDir = Join-Path $Root "tools"
 $Adapter = Join-Path $ToolsDir "windows_zhuda_local_adapter.ps1"
+$Injector = Join-Path $ToolsDir "zhuda_model_injector.ps1"
 $ProfileRoot = Join-Path $Root "profile"
 $CodexHome = Join-Path $ProfileRoot ".codex"
 $AppData = Join-Path $ProfileRoot "AppData\Roaming"
 $LocalAppData = Join-Path $ProfileRoot "AppData\Local"
 $ElectronData = Join-Path $ProfileRoot "ElectronUserData"
 $AdapterLogDir = Join-Path $ProfileRoot "logs"
+$ModelInjectorLogPath = Join-Path $AdapterLogDir "model-injector.log"
+$ModelInjectorErrPath = Join-Path $AdapterLogDir "model-injector.err.log"
 
 function Ensure-Dir { param([string]$Path) New-Item -ItemType Directory -Force -Path $Path | Out-Null }
 
@@ -176,6 +179,69 @@ function Stop-AdapterProcesses {
                 Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
             }
     } catch {}
+}
+
+function Test-TcpPortOpen {
+    param([int]$TcpPort)
+    try {
+        $client = New-Object System.Net.Sockets.TcpClient
+        $iar = $client.BeginConnect("127.0.0.1", $TcpPort, $null, $null)
+        $ok = $iar.AsyncWaitHandle.WaitOne(250, $false)
+        if ($ok) { $client.EndConnect($iar) }
+        $client.Close()
+        return $ok
+    } catch {
+        return $false
+    }
+}
+
+function Get-FreeCdpPort {
+    $port = 9233
+    while (Test-TcpPortOpen $port) {
+        $port += 1
+        if ($port -gt 9313) { return 9233 }
+    }
+    return $port
+}
+
+function Join-CommandLine {
+    param([string[]]$Items)
+    $quoted = @()
+    foreach ($item in $Items) {
+        if ($null -eq $item) { $item = "" }
+        $quoted += '"' + ([string]$item).Replace('"', '\"') + '"'
+    }
+    return ($quoted -join " ")
+}
+
+function Start-DetachedProcess {
+    param(
+        [string]$FilePath,
+        [string[]]$ArgumentList = @(),
+        [int]$WindowStyle = 0
+    )
+    $commandLine = Join-CommandLine (@($FilePath) + @($ArgumentList))
+    try {
+        $shell = New-Object -ComObject WScript.Shell
+        [void]$shell.Run($commandLine, $WindowStyle, $false)
+    } catch {
+        Start-Process -FilePath $FilePath -ArgumentList $ArgumentList -WindowStyle Hidden | Out-Null
+    }
+}
+
+function Start-ModelInjector {
+    param([int]$CdpPort, [string]$SelectedModel)
+    if (-not (Test-Path $Injector)) { return }
+    $models = [string]$env:ZHUDA_VISIBLE_MODELS
+    if (-not $models) { $models = $SelectedModel }
+    Start-Process -FilePath "powershell.exe" -ArgumentList @(
+        "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $Injector,
+        "-Port", "$CdpPort",
+        "-Models", $models,
+        "-DefaultModel", $SelectedModel,
+        "-ProviderName", "Zhuda-Codex",
+        "-DurationSeconds", "25"
+    ) -WindowStyle Hidden -RedirectStandardOutput $ModelInjectorLogPath -RedirectStandardError $ModelInjectorErrPath | Out-Null
 }
 
 Ensure-Dir $ProfileRoot
@@ -232,10 +298,10 @@ if ($env:ZHUDA_GEMINI_API_KEY -or $env:GEMINI_API_KEY_1 -or $env:GEMINI_API_KEY)
 }
 
 if (-not (Test-Adapter)) {
-    Start-Process -FilePath "powershell.exe" -ArgumentList @(
+    Start-DetachedProcess -FilePath "powershell.exe" -ArgumentList @(
         "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $Adapter,
         "-ServeOnly", "-Model", $Model
-    ) -WindowStyle Hidden | Out-Null
+    )
     for ($i = 0; $i -lt 40; $i++) {
         Start-Sleep -Milliseconds 300
         if (Test-Adapter) { break }
@@ -247,7 +313,9 @@ if (-not (Test-Adapter)) {
 }
 
 if (-not $NoLaunch) {
-    Start-Process -FilePath $AppExe -WorkingDirectory (Join-Path $Root "app") -ArgumentList @("--user-data-dir=$ElectronData") | Out-Null
+    $cdpPort = Get-FreeCdpPort
+    Start-DetachedProcess -FilePath $AppExe -ArgumentList @("--user-data-dir=$ElectronData", "--remote-debugging-address=127.0.0.1", "--remote-debugging-port=$cdpPort") -WindowStyle 1
+    Start-ModelInjector $cdpPort $codexModel
 }
 '@
     $localPs1 = $localPs1.Replace("__DEFAULT_MODEL__", $DefaultModel)
@@ -311,7 +379,8 @@ function Main {
     $toolNames = @(
         "windows_zhuda_local_adapter.ps1",
         "windows_zhuda_remote.ps1",
-        "windows_zhuda_connect.ps1"
+        "windows_zhuda_connect.ps1",
+        "zhuda_model_injector.ps1"
     )
     foreach ($name in $toolNames) {
         $local = Join-Path $RuntimeDir $name

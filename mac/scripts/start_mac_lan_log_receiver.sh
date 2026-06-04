@@ -25,6 +25,7 @@ cp "${WIN_DIR}/windows_zhuda_connect.cmd" "${DOWNLOAD_DIR}/windows_zhuda_connect
 cp "${WIN_DIR}/windows_zhuda_make_portable.ps1" "${DOWNLOAD_DIR}/windows_zhuda_make_portable.ps1"
 cp "${WIN_DIR}/Zhuda-Codex-Launcher.ps1" "${DOWNLOAD_DIR}/Zhuda-Codex-Launcher.ps1"
 cp "${WIN_DIR}/Zhuda-Codex-Launcher.cmd" "${DOWNLOAD_DIR}/Zhuda-Codex-Launcher.cmd"
+cp "${WIN_DIR}/zhuda_model_injector.ps1" "${DOWNLOAD_DIR}/zhuda_model_injector.ps1"
 cp "${PROJECT_DIR}/providers.json" "${DOWNLOAD_DIR}/providers.json"
 cp "${PROJECT_DIR}/launcher/zhuda_web_launcher.ps1" "${LAUNCHER_DOWNLOAD_DIR}/zhuda_web_launcher.ps1"
 cp "${PROJECT_DIR}/launcher/web/"*.html "${LAUNCHER_WEB_DOWNLOAD_DIR}/" 2>/dev/null || true
