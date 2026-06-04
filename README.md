@@ -12,18 +12,33 @@ API key 只在本次启动时通过进程环境变量注入，不写入仓库，
 - 它不是破解 Codex，也不是官方产品；它只是把 Codex Desktop 的本地应用体验接到你自己选择的模型供应商。
 - 请遵守你所在地区的法律法规、供应商服务条款，以及你自己 API key 的使用限制。
 
-## 下载 portable 应用
+## 一键安装
 
-请到 [GitHub Releases](https://github.com/zhudaandzhuer/Zhuda-Codex/releases/latest) 下载：
+GitHub 不分发夹带官方 Codex Desktop 本体的 portable 包。安装脚本只下载 Zhuda-Codex 自己的启动器、adapter 和构建脚本；需要 Codex 本体时，会在你的电脑本机读取已安装的官方 Codex Desktop 并生成私有副本。
 
-- `Zhuda-Codex-macOS-Portable.zip`
-- `Zhuda-Codex-Windows-Portable.zip`
+### macOS
 
-macOS 解压后运行 `mac/Zhuda-Codex-Launcher.command`。
+先安装官方 Codex Desktop，然后运行：
 
-Windows 解压后运行 `Zhuda-Codex-Launcher.cmd`。
+```bash
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/zhudaandzhuer/Zhuda-Codex/main/install/macos.sh)"
+```
 
-如果 Windows 版本暂时没有正式 portable zip，请先使用 Release 里的 Windows builder 包，或在已安装 Codex Desktop 的 Windows 机器上运行 `win/windows_zhuda_make_portable.ps1 -Zip` 生成。
+脚本会安装到 `~/Documents/ZhudaCodex`，并在本机从 `/Applications/Codex.app` 生成 `mac/dist/Zhuda-Codex.app`。
+
+### Windows
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/zhudaandzhuer/Zhuda-Codex/main/install/windows.ps1 | iex"
+```
+
+脚本会安装到 `Documents\ZhudaCodex` 并打开 Zhuda-Codex Launcher。
+
+如果想在自己的 Windows 机器上生成私有 portable 副本：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -Command "& ([scriptblock]::Create((irm https://raw.githubusercontent.com/zhudaandzhuer/Zhuda-Codex/main/install/windows.ps1))) -BuildPortable"
+```
 
 ## 实验产品说明
 
@@ -37,10 +52,10 @@ Zhuda-Codex 目前是实验产品。不同 Codex Desktop 版本、不同供应�
 
 ## 现在的状态
 
-- macOS 版本已经有 Web 启动器、独立 App 包、本地 adapter、模型菜单 bundle 补丁、错误边界处理。
-- Windows 版本已经有 Web 启动器、供应商选择、API key 会话注入、portable 构建脚本。
-- Windows portable 构建脚本会在可用时给 `app.asar` 套用同一套模型菜单 bundle 补丁；如果构建机缺少 Python 或 npx，会退回模型缓存和运行时注入兜底。
-- GitHub 仓库发布的是源码，不等于已经打好的 portable 成品包。Windows 想免安装运行，需要先用构建脚本生成 portable 包，或等待 Release zip。
+- macOS 版本已经有 Web 启动器、本机独立 App 构建脚本、本地 adapter、模型菜单 bundle 补丁、错误边界处理。
+- Windows 版本已经有 Web 启动器、供应商选择、API key 会话注入、本机 portable 构建脚本。
+- Windows portable 构建脚本会在用户自己的 Windows 机器上复制已安装的官方 Codex Desktop，并在可用时给 `app.asar` 套用同一套模型菜单 bundle 补丁；如果构建机缺少 Python 或 npx，会退回模型缓存和运行时注入兜底。
+- GitHub 仓库发布的是源码和 Zhuda-Codex 工具，不分发官方 Codex Desktop 二进制。Windows 想免安装运行，需要在自己的电脑上用构建脚本生成 private portable 包。
 
 ## 支持的供应商
 
