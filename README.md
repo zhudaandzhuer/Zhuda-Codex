@@ -14,7 +14,7 @@ API key 只在本次启动时通过进程环境变量注入，不写入仓库，
 
 ## 一键安装
 
-GitHub 不分发夹带官方 Codex Desktop 本体的 portable 包。安装脚本只下载 Zhuda-Codex 自己的启动器、adapter 和构建脚本；需要 Codex 本体时，会在你的电脑本机读取已安装的官方 Codex Desktop 并生成私有副本。
+GitHub 不分发夹带官方 Codex Desktop 本体的 portable 包。安装脚本只下载 Zhuda-Codex 自己的启动器、adapter 和构建脚本；需要 Codex 本体时，会在你的电脑本机安装或读取已安装的官方 Codex Desktop，并在需要时生成私有副本。
 
 ### macOS
 
@@ -33,6 +33,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubus
 ```
 
 脚本会安装到 `Documents\ZhudaCodex` 并打开 Zhuda-Codex Launcher。
+
+Windows 脚本会先检查本机是否已经安装官方 Codex Desktop。若没有安装，会尝试通过 Microsoft Store / `winget` 安装官方 Codex；如果自动安装没有完成，脚本会打开 Microsoft Store 页面并停止，请先安装 Codex Desktop 后再重跑上面的命令。
 
 如果想在自己的 Windows 机器上生成私有 portable 副本：
 
@@ -197,7 +199,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\win\Zhuda-Codex-Launcher.p
 
 ### 从 GitHub 拉下来为什么会报错？
 
-因为 GitHub 仓库是源码，不是完整 portable 成品包。源码不会包含 Windows 的 `app/Codex.exe`，也不会包含 macOS 的 `mac/dist/Zhuda-Codex.app` 生成物。请先按平台构建，或使用后续 Release 里的 zip 包。
+因为 GitHub 仓库是源码，不是完整 portable 成品包。源码不会包含 Windows 的 `app/Codex.exe`，也不会包含 macOS 的 `mac/dist/Zhuda-Codex.app` 生成物。Windows 一键安装脚本会先确保官方 Codex Desktop 已安装，再启动 Zhuda-Codex Launcher；如果你手动下载源码运行，请先按平台构建，或使用自己机器生成的 private portable 包。
 
 ### 为什么 Codex 菜单里还是 GPT 名称？
 

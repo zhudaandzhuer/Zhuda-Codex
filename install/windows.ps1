@@ -2,6 +2,7 @@
 param(
     [string]$InstallDir = "",
     [switch]$BuildPortable,
+    [switch]$SkipCodexInstall,
     [switch]$NoLaunch
 )
 
@@ -10,6 +11,7 @@ $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 
 $RepoZipUrl = if ($env:ZHUDA_CODEX_REPO_ZIP_URL) { $env:ZHUDA_CODEX_REPO_ZIP_URL } else { "https://github.com/zhudaandzhuer/Zhuda-Codex/archive/refs/heads/main.zip" }
+$CodexProductId = "9PLM9XGG6VKS"
 if (-not $InstallDir) {
     $InstallDir = Join-Path ([Environment]::GetFolderPath("MyDocuments")) "ZhudaCodex"
 }
@@ -21,6 +23,39 @@ $ExtractRoot = Join-Path $TempRoot "extract"
 function Ensure-Dir {
     param([string]$Path)
     New-Item -ItemType Directory -Force -Path $Path | Out-Null
+}
+
+function Get-CodexPackage {
+    Get-AppxPackage -Name "OpenAI.Codex" -ErrorAction SilentlyContinue |
+        Sort-Object Version -Descending |
+        Select-Object -First 1
+}
+
+function Ensure-CodexDesktop {
+    $pkg = Get-CodexPackage
+    if ($pkg) {
+        Write-Host "Codex Desktop found: $($pkg.Version)"
+        return
+    }
+    if ($SkipCodexInstall) {
+        Write-Warning "Codex Desktop is not installed. Zhuda-Codex can install adapter files, but it cannot launch Codex until the official app is installed."
+        return
+    }
+
+    Write-Host "Codex Desktop is not installed. Installing official Codex Desktop from Microsoft Store..."
+    $winget = Get-Command winget.exe -ErrorAction SilentlyContinue
+    if ($winget) {
+        & winget install --id $CodexProductId --source msstore --accept-package-agreements --accept-source-agreements --disable-interactivity | Out-Host
+        $pkg = Get-CodexPackage
+        if ($pkg) {
+            Write-Host "Codex Desktop installed: $($pkg.Version)"
+            return
+        }
+    }
+
+    Write-Warning "Automatic Store install did not complete. Opening Microsoft Store page. Install Codex Desktop there, then rerun this installer."
+    Start-Process "ms-windows-store://pdp/?productid=$CodexProductId" | Out-Null
+    throw "Codex Desktop is required before Zhuda-Codex can launch."
 }
 
 try {
@@ -42,6 +77,8 @@ try {
         throw "robocopy failed with exit code $LASTEXITCODE"
     }
 
+    Ensure-CodexDesktop
+
     if ($BuildPortable) {
         $Builder = Join-Path $InstallDir "win\windows_zhuda_make_portable.ps1"
         if (-not (Test-Path $Builder)) { throw "Missing builder: $Builder" }
@@ -56,4 +93,3 @@ try {
 } finally {
     Remove-Item $TempRoot -Recurse -Force -ErrorAction SilentlyContinue
 }
-
