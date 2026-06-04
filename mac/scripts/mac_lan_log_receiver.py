@@ -447,13 +447,21 @@ def make_handler(state):
                     return
                 if path.exists() and path.is_file():
                     data = path.read_bytes()
-                    text = data.decode("utf-8", errors="replace") if path.suffix.lower() in (".ps1", ".cmd") else ""
+                    is_windows_script = path.suffix.lower() in (".ps1", ".cmd")
+                    text = data.decode("utf-8-sig", errors="replace") if is_windows_script else ""
                     if "__ZHUDA_" in text:
                         host = self.headers.get("Host") or f"127.0.0.1:{self.server.server_port}"
                         receiver = f"http://{host}"
                         text = text.replace("__ZHUDA_CONTROL_TOKEN__", state.control_token)
                         text = text.replace("__ZHUDA_RECEIVER_URL__", receiver)
                         data = text.encode("utf-8")
+                    if path.suffix.lower() == ".ps1":
+                        # Windows PowerShell 5.1 treats UTF-8 without BOM as ANSI.
+                        # Serve PS1 files with a BOM so Chinese UI text cannot corrupt parsing.
+                        if text:
+                            data = text.encode("utf-8-sig")
+                        elif not data.startswith(b"\xef\xbb\xbf"):
+                            data = b"\xef\xbb\xbf" + data
                     self.send_data(200, "application/octet-stream", data)
                     return
                 self.send_data(404, "application/json; charset=utf-8", json_bytes({"error": "download_not_found"}))

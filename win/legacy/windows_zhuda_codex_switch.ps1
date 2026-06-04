@@ -981,7 +981,7 @@ function Invoke-Gemini {
     Load-RuntimeConfig
     $UpstreamModel = Resolve-RequestedGeminiModel $RequestedModel
     if (-not $GeminiApiKey) {
-        $text = "Zhuda-Codex 沒拿到 Gemini API key。請重新開啟 Zhuda-Codex Launcher，選 Gemini、選模型，然後貼上本次要用的 API key。這套啟動器不會把 API key 保存到本地。"
+        $text = "Zhuda-Codex did not receive a Gemini API key. Reopen Zhuda-Codex Launcher, choose Gemini and a model, then paste the one-session API key. The launcher does not save API keys locally."
         return @{ type = "text"; text = $text; upstream = $null; upstreamModel = $UpstreamModel; durationMs = 0; error = "missing_api_key" }
     }
     $Declarations = @($Declarations)
@@ -1060,7 +1060,7 @@ function Mimo-FailureText {
     param([int]$Status, [string]$Message, [string]$ResponseBody, [string]$UpstreamModel)
     $raw = "$Message`n$ResponseBody"
     if (($Status -eq 429) -or ($raw -match "quota|rate|limit|RESOURCE_EXHAUSTED")) {
-        return "Zhuda local MiMo could not complete this turn.`n`n- Model: $UpstreamModel`n- Status: $Status`n- Reason: quota/rate limit or upstream throttling`n`n請稍後再試，或在 Zhuda-Codex Launcher 裡把這個 Codex 模型映射到另一個上游模型。"
+        return "Zhuda local MiMo could not complete this turn.`n`n- Model: $UpstreamModel`n- Status: $Status`n- Reason: quota/rate limit or upstream throttling`n`nRetry later, or use Zhuda-Codex Launcher to map this Codex model to another upstream model."
     }
     return "Zhuda local MiMo could not complete this turn.`n`n- Model: $UpstreamModel`n- Status: $Status`n- Reason: $Message"
 }
@@ -1070,7 +1070,7 @@ function Invoke-Mimo {
     Load-RuntimeConfig
     $UpstreamModel = Resolve-RequestedGeminiModel $RequestedModel
     if (-not $GeminiApiKey) {
-        $text = "Zhuda-Codex 沒拿到 MiMo API key。請重新開啟 Zhuda-Codex Launcher，選 Xiaomi MiMo，然後貼上本次要用的 API key。這套啟動器不會把 API key 保存到本地。"
+        $text = "Zhuda-Codex did not receive a MiMo API key. Reopen Zhuda-Codex Launcher, choose Xiaomi MiMo, then paste the one-session API key. The launcher does not save API keys locally."
         return @{ type = "text"; text = $text; upstream = $null; upstreamModel = $UpstreamModel; durationMs = 0; error = "missing_api_key" }
     }
     $systemText = (System-Instruction) + "`n`n[Zhuda provider note] This turn is routed through Xiaomi MiMo in text-answer mode. If tools are needed, explain the next useful step instead of pretending a tool was executed."

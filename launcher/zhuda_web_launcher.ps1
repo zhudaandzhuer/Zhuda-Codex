@@ -307,7 +307,7 @@ function Handle-Request {
             Start-HeadlessLaunch $provider $resolvedMappings $apiKey $endpointId $baseUrl $modelId
             Send-Json $Context 200 @{
                 ok = $true
-                message = "已启动 $($provider.name)，默认 $selectedUpstream，$($visibleModels.Count) 个真实模型可供 Codex 使用。"
+                message = "Started $($provider.name). Default upstream: $selectedUpstream. $($visibleModels.Count) real models are available to Codex."
                 endpoint = $endpointId
                 selectedModel = $selectedUpstream
                 visibleModels = $visibleModels
