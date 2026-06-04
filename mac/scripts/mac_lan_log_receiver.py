@@ -14,6 +14,7 @@ from pathlib import Path
 
 
 DOWNLOAD_DIR = Path.home() / ".zhuda-codex" / "downloads"
+UPLOAD_DIR = Path.home() / ".zhuda-codex" / "uploads"
 CONTROL_TOKEN_FILE = Path.home() / ".zhuda-codex" / "control_token"
 
 SECRET_PATTERNS = [
@@ -50,6 +51,13 @@ def safe_name(value):
     value = redact_text(value or "unknown")
     value = re.sub(r"[^A-Za-z0-9_.-]+", "_", value).strip("._")
     return value[:120] or "unknown"
+
+
+def safe_upload_name(value):
+    name = safe_name(value or "upload.bin")
+    if "." not in name:
+        name += ".bin"
+    return name
 
 
 def read_control_token():
@@ -500,6 +508,35 @@ def make_handler(state):
 
         def do_POST(self):
             parsed_path = urllib.parse.urlparse(self.path).path
+            if parsed_path == "/upload":
+                if not self.authorized():
+                    self.send_unauthorized()
+                    return
+                parsed = urllib.parse.urlparse(self.path)
+                query = urllib.parse.parse_qs(parsed.query)
+                name = safe_upload_name(query.get("name", ["upload.bin"])[0])
+                length = int(self.headers.get("Content-Length", "0"))
+                if length <= 0:
+                    self.send_data(400, "application/json; charset=utf-8", json_bytes({"ok": False, "error": "missing content"}))
+                    return
+                if length > 1024 * 1024 * 1024:
+                    self.send_data(413, "application/json; charset=utf-8", json_bytes({"ok": False, "error": "upload too large"}))
+                    return
+                UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+                path = UPLOAD_DIR / name
+                remaining = length
+                with path.open("wb") as fh:
+                    while remaining > 0:
+                        chunk = self.rfile.read(min(1024 * 1024, remaining))
+                        if not chunk:
+                            break
+                        fh.write(chunk)
+                        remaining -= len(chunk)
+                if remaining != 0:
+                    self.send_data(400, "application/json; charset=utf-8", json_bytes({"ok": False, "error": "incomplete upload", "path": str(path)}))
+                    return
+                self.send_data(200, "application/json; charset=utf-8", json_bytes({"ok": True, "path": str(path), "bytes": length}))
+                return
             if parsed_path == "/api/command":
                 if not self.authorized():
                     self.send_unauthorized()

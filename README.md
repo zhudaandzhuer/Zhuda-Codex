@@ -6,6 +6,35 @@ API key 只在本次启动时通过进程环境变量注入，不写入仓库，
 
 ![Zhuda-Codex 启动器](docs/images/launcher-overview.png)
 
+## 它解决什么
+
+- 在中国内地网络环境里，可以通过本地 adapter + 可直连的上游供应商使用 Codex Desktop 的工作流，不需要为了连接 OpenAI 官方线路而翻墙。
+- 它不是破解 Codex，也不是官方产品；它只是把 Codex Desktop 的本地应用体验接到你自己选择的模型供应商。
+- 请遵守你所在地区的法律法规、供应商服务条款，以及你自己 API key 的使用限制。
+
+## 下载 portable 应用
+
+请到 [GitHub Releases](https://github.com/zhudaandzhuer/Zhuda-Codex/releases/latest) 下载：
+
+- `Zhuda-Codex-macOS-Portable.zip`
+- `Zhuda-Codex-Windows-Portable.zip`
+
+macOS 解压后运行 `mac/Zhuda-Codex-Launcher.command`。
+
+Windows 解压后运行 `Zhuda-Codex-Launcher.cmd`。
+
+如果 Windows 版本暂时没有正式 portable zip，请先使用 Release 里的 Windows builder 包，或在已安装 Codex Desktop 的 Windows 机器上运行 `win/windows_zhuda_make_portable.ps1 -Zip` 生成。
+
+## 实验产品说明
+
+Zhuda-Codex 目前是实验产品。不同 Codex Desktop 版本、不同供应商模型、不同网络环境都会带来边界问题，例如模型菜单刷新慢、上游 5xx、工具调用格式不稳定、长任务超时等。
+
+遇到问题时，推荐直接让 AI 读取并分析 adapter log，然后根据日志继续改进 adapter。日志入口通常是：
+
+- macOS：`~/Library/Application Support/Zhuda-Codex/logs/`
+- Windows portable：`profile/logs/`
+- 局域网日志面板：`http://YOUR_MAC_IP:4100/logs`
+
 ## 现在的状态
 
 - macOS 版本已经有 Web 启动器、独立 App 包、本地 adapter、模型菜单 bundle 补丁、错误边界处理。
