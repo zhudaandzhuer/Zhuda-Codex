@@ -14,6 +14,24 @@
 
 如果 `mac/dist/Zhuda-Codex.app` 已经存在，launcher 会使用这个独立 App 包。它不会覆盖系统里的官方 Codex，也不会把 provider 配置写进官方 Codex 全局配置。
 
+独立 App 会使用隔离的：
+
+```text
+~/Library/Application Support/Zhuda-Codex/codex-home/
+```
+
+如果仓库根目录存在 `skills/`，构建 App 时会复制进包内，并在启动时同步到隔离的 `codex-home/skills/`。这不会修改官方 `~/.codex/skills`。
+
+如果这是你自己使用的私有 App，想把当前用户的全局 skills 一起打进去：
+
+```bash
+ZHUDA_CODEX_INCLUDE_USER_SKILLS=1 ./mac/scripts/build_zhuda_codex_app.sh
+```
+
+不加这个环境变量时，不会把当前用户的私有 `~/.codex/skills` 打进 App 包。若包内没有真正的 `SKILL.md`，启动时会自动镜像当前电脑的 `~/.codex/skills` 到隔离的 `codex-home/skills/`，让这台电脑上的全局 skills 可以被独立 App 读到；如果不想导入，启动前设置 `ZHUDA_CODEX_IMPORT_USER_SKILLS=0`。
+
+独立 App 启动时会写入 `check_for_update_on_startup = false`，并设置 Electron/updater 抑制环境变量。它运行的是 `Zhuda-Codex.app` 内部复制出来的 Codex 本体，不会每次启动都自动追官方新版。
+
 模型菜单优先通过 `app.asar` bundle 补丁读取本地 adapter 的 `/pool/status`。如果重新构建或替换了 App 包，可以手动重套补丁：
 
 ```bash

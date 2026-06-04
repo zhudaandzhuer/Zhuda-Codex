@@ -12,6 +12,7 @@ Windows 已经追上这些能力：
 - 真实上游模型选择和 adapter 映射。
 - portable 构建脚本。
 - portable 构建时的 `app.asar` 模型菜单补丁。
+- portable 内部 `CODEX_HOME/skills` 同步，公开 skills 可随包携带。
 - 局域网日志转发和远程接入脚本。
 
 Windows 和 macOS 仍有一点差异：
@@ -63,6 +64,22 @@ tools\windows_zhuda_local_adapter.ps1
 这些是构建 portable 时生成或复制出来的运行时文件。
 
 构建脚本会尝试修补 portable 内部的 `app.asar`。需要构建机能运行 Python 和 npx；如果缺少其中之一，脚本会继续生成 portable 包，只是模型菜单会使用缓存/注入兜底。
+
+portable 会使用自己的 `profile\.codex`，不会修改官方 Codex 的全局 `~\.codex`。如果仓库根目录存在 `skills\`，构建时会复制进 portable，并在启动时同步到：
+
+```text
+profile\.codex\skills\
+```
+
+如果这是你自己使用的私有 portable 包，想把当前 Windows 用户的全局 skills 一起打进去：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\win\windows_zhuda_make_portable.ps1 -Zip -IncludeUserSkills
+```
+
+不加 `-IncludeUserSkills` 时，不会把当前用户的私有 `~\.codex\skills` 打进 zip。若包内没有真正的 `SKILL.md`，启动时会自动镜像当前电脑的 `~\.codex\skills` 到 `profile\.codex\skills`，让这台电脑上的全局 skills 可以被 portable 读到；如果不想导入，启动前设置 `ZHUDA_CODEX_IMPORT_USER_SKILLS=0`。
+
+portable 启动时会写入 `check_for_update_on_startup = false`，并设置 Electron/updater 抑制环境变量。它运行的是包内 `app\Codex.exe`，不会每次启动都去更新官方 Store 版。
 
 ## 远程接入
 

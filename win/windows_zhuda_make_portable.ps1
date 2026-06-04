@@ -3,6 +3,7 @@ param(
     [string]$ReceiverUrl = "__ZHUDA_RECEIVER_URL__",
     [string]$Model = "gemma-31b",
     [string]$OutputRoot = "",
+    [switch]$IncludeUserSkills,
     [switch]$Launch,
     [switch]$Zip
 )
@@ -120,12 +121,16 @@ $Adapter = Join-Path $ToolsDir "windows_zhuda_local_adapter.ps1"
 $Injector = Join-Path $ToolsDir "zhuda_model_injector.ps1"
 $ProfileRoot = Join-Path $Root "profile"
 $CodexHome = Join-Path $ProfileRoot ".codex"
+$CodexSkills = Join-Path $CodexHome "skills"
 $AppData = Join-Path $ProfileRoot "AppData\Roaming"
 $LocalAppData = Join-Path $ProfileRoot "AppData\Local"
 $ElectronData = Join-Path $ProfileRoot "ElectronUserData"
 $AdapterLogDir = Join-Path $ProfileRoot "logs"
 $ModelInjectorLogPath = Join-Path $AdapterLogDir "model-injector.log"
 $ModelInjectorErrPath = Join-Path $AdapterLogDir "model-injector.err.log"
+$BundledSkills = Join-Path $Root "skills"
+$RealUserProfile = $env:USERPROFILE
+$RealUserSkills = Join-Path $RealUserProfile ".codex\skills"
 
 function Ensure-Dir { param([string]$Path) New-Item -ItemType Directory -Force -Path $Path | Out-Null }
 
@@ -155,6 +160,40 @@ function Ensure-PortableKnownFolders {
             } catch {}
         }
         Ensure-Dir $link
+    }
+}
+
+function Sync-TreeRobust {
+    param([string]$Source, [string]$Dest)
+    if (-not (Test-Path $Source)) { return }
+    Ensure-Dir $Dest
+    $null = robocopy $Source $Dest /MIR /R:2 /W:1 /NFL /NDL /NJH /NJS /NP
+    if ($LASTEXITCODE -gt 7) {
+        throw "robocopy failed while syncing $Source to $Dest with exit code $LASTEXITCODE"
+    }
+}
+
+function Test-SkillsRoot {
+    param([string]$Path)
+    if (-not (Test-Path $Path)) { return $false }
+    $found = Get-ChildItem -Path $Path -Filter "SKILL.md" -Recurse -File -ErrorAction SilentlyContinue | Select-Object -First 1
+    return ($null -ne $found)
+}
+
+function Sync-PortableSkills {
+    $source = ""
+    $importSetting = [string]$env:ZHUDA_CODEX_IMPORT_USER_SKILLS
+    if ($importSetting -eq "1" -and (Test-SkillsRoot $RealUserSkills)) {
+        $source = $RealUserSkills
+    } elseif (Test-SkillsRoot $BundledSkills) {
+        $source = $BundledSkills
+    } elseif ($importSetting -ne "0" -and (Test-SkillsRoot $RealUserSkills)) {
+        $source = $RealUserSkills
+    } elseif (Test-Path $BundledSkills) {
+        $source = $BundledSkills
+    }
+    if ($source) {
+        Sync-TreeRobust $source $CodexSkills
     }
 }
 
@@ -362,6 +401,7 @@ function Write-ModelCache {
 Ensure-Dir $ProfileRoot
 Ensure-PortableKnownFolders
 Ensure-Dir $CodexHome
+Sync-PortableSkills
 Ensure-Dir $AppData
 Ensure-Dir $LocalAppData
 Ensure-Dir $ElectronData
@@ -372,6 +412,10 @@ $env:APPDATA = $AppData
 $env:LOCALAPPDATA = $LocalAppData
 $env:CODEX_HOME = $CodexHome
 $env:ZHUDA_CODEX_PORTABLE = "1"
+$env:ELECTRON_NO_UPDATER = "1"
+$env:NO_UPDATE_NOTIFIER = "1"
+$env:SQUIRREL_UPDATES_DISABLED = "1"
+$env:OPENAI_DISABLE_AUTO_UPDATE = "1"
 
 $codexModel = Resolve-CodexModelSlug $Model
 $config = @"
@@ -399,6 +443,9 @@ if ($DryRun) {
     Write-Output "app=$AppExe"
     Write-Output "profile=$ProfileRoot"
     Write-Output "codex_home=$CodexHome"
+    Write-Output "codex_skills=$CodexSkills"
+    Write-Output "bundled_skills=$(Test-Path $BundledSkills)"
+    Write-Output "skills_ready=$(Test-Path $CodexSkills)"
     Write-Output "model_cache=$(Join-Path $CodexHome 'models_cache.json')"
     Write-Output "model=$Model"
     Write-Output "codex_model=$codexModel"
@@ -554,6 +601,20 @@ function Main {
 
     Copy-Tree $source (Join-Path $tmpRoot "app")
 
+    $sourceRoot = Split-Path -Parent (Split-Path -Parent $PSCommandPath)
+    $skillsSource = ""
+    if ($IncludeUserSkills) {
+        $candidate = Join-Path $env:USERPROFILE ".codex\skills"
+        if (Test-Path $candidate) { $skillsSource = $candidate }
+    }
+    if (-not $skillsSource) {
+        $candidate = Join-Path $sourceRoot "skills"
+        if (Test-Path $candidate) { $skillsSource = $candidate }
+    }
+    if ($skillsSource) {
+        Copy-Tree $skillsSource (Join-Path $tmpRoot "skills")
+    }
+
     $toolNames = @(
         "windows_zhuda_local_adapter.ps1",
         "windows_zhuda_remote.ps1",
@@ -606,7 +667,6 @@ function Main {
 
     $launcherTmp = Join-Path $tmpRoot "launcher"
     Ensure-Dir $launcherTmp
-    $sourceRoot = Split-Path -Parent (Split-Path -Parent $PSCommandPath)
     $sharedLauncher = Join-Path $sourceRoot "launcher\zhuda_web_launcher.ps1"
     if (Test-Path $sharedLauncher) {
         Copy-Item $sharedLauncher (Join-Path $launcherTmp "zhuda_web_launcher.ps1") -Force

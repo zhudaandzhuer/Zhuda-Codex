@@ -57,6 +57,8 @@ Zhuda-Codex 目前是实验产品。不同 Codex Desktop 版本、不同供应�
 - macOS 版本已经有 Web 启动器、本机独立 App 构建脚本、本地 adapter、模型菜单 bundle 补丁、错误边界处理。
 - Windows 版本已经有 Web 启动器、供应商选择、API key 会话注入、本机 portable 构建脚本。
 - Windows portable 构建脚本会在用户自己的 Windows 机器上复制已安装的官方 Codex Desktop，并在可用时给 `app.asar` 套用同一套模型菜单 bundle 补丁；如果构建机缺少 Python 或 npx，会退回模型缓存和运行时注入兜底。
+- portable 会使用隔离的 `CODEX_HOME`，并把仓库 `skills/` 同步到 portable 内部的 `CODEX_HOME/skills`。如果 portable 包内没有真正的 `SKILL.md`，启动时会自动镜像当前电脑的官方全局 `~/.codex/skills` 到隔离目录；这只复制到 portable profile，不会修改官方全局目录。
+- portable 启动时会写入 `check_for_update_on_startup = false`，并设置 Electron/updater 抑制环境变量。它会运行包内复制出来的 Codex 本体，不会在每次启动时从 Microsoft Store 或官方 App 自动追新版。
 - GitHub 仓库发布的是源码和 Zhuda-Codex 工具，不分发官方 Codex Desktop 二进制。Windows 想免安装运行，需要在自己的电脑上用构建脚本生成 private portable 包。
 
 ## 支持的供应商
@@ -127,6 +129,22 @@ Documents\ZhudaCodex\portable\Zhuda-Codex-Portable.zip
 
 构建脚本会优先尝试修补 portable 内部的 `app.asar`，让模型菜单直接读取本地 adapter 的 `/pool/status`。如果构建环境没有 Python 或 npx，脚本会保留旧的模型缓存和运行时注入兜底，不会中断 portable 生成。
 
+如果要把当前 Windows 用户的全局 Codex skills 一起打进自己的私有 portable 包：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\win\windows_zhuda_make_portable.ps1 -Zip -IncludeUserSkills
+```
+
+不加 `-IncludeUserSkills` 时，只会携带仓库根目录下的公开 `skills/`。如果包内没有真正的 `SKILL.md`，启动时会临时镜像当前电脑的 `~/.codex/skills`；若不想这样做，可在启动前设置 `ZHUDA_CODEX_IMPORT_USER_SKILLS=0`。
+
+macOS 私有构建若要带入当前用户的全局 skills：
+
+```bash
+ZHUDA_CODEX_INCLUDE_USER_SKILLS=1 ./mac/scripts/build_zhuda_codex_app.sh
+```
+
+不加这个环境变量时，macOS App 也只会携带仓库根目录下的公开 `skills/`。如果包内没有真正的 `SKILL.md`，启动时会临时镜像当前电脑的 `~/.codex/skills`；若不想这样做，可在启动前设置 `ZHUDA_CODEX_IMPORT_USER_SKILLS=0`。
+
 ## 目录结构
 
 ```text
@@ -135,6 +153,7 @@ ZhudaCodex/
   docs/images/               README 展示截图
   launcher/                  macOS / Windows 共用 Web 启动器
   mac/                       macOS adapter、App 包装脚本、局域网日志接收器
+  skills/                    可随 portable 携带的公开 Codex skills
   win/                       Windows 启动器、远程接入脚本、portable 构建脚本
   providers.json             供应商和模型清单
   scripts/                    维护脚本，例如 app.asar 模型菜单补丁

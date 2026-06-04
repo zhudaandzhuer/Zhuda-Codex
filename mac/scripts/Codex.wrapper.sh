@@ -6,6 +6,7 @@ APP_ROOT="$(cd "$APP_DIR/.." && pwd)"
 APP_DOMAIN="com.zhuda.zhuda-codex"
 SUPPORT_ROOT="${HOME}/Library/Application Support/Zhuda-Codex"
 CODEX_HOME_DIR="${SUPPORT_ROOT}/codex-home"
+CODEX_SKILLS_DIR="${CODEX_HOME_DIR}/skills"
 USER_DATA_DIR="${SUPPORT_ROOT}/electron-user-data"
 LOG_DIR="${SUPPORT_ROOT}/logs"
 CONFIG_FILE="${CODEX_HOME_DIR}/config.toml"
@@ -13,6 +14,7 @@ ADAPTER_PORT="${ZHUDA_CODEX_GEMINI_PORT:-4400}"
 ADAPTER_BASE_URL="http://127.0.0.1:${ADAPTER_PORT}"
 CDP_PORT="${ZHUDA_CODEX_CDP_PORT:-9233}"
 SOURCE_ADAPTER_ROOT="${ZHUDA_CODEX_SOURCE_ADAPTER_ROOT:-${HOME}/Documents/ZhudaCodex/mac}"
+SOURCE_SKILLS_ROOT="${ZHUDA_CODEX_SOURCE_SKILLS_ROOT:-${HOME}/Documents/ZhudaCodex/skills}"
 SOURCE_ADAPTER_FILE="${SOURCE_ADAPTER_ROOT}/zhuda_gemini_pool_adapter.py"
 SOURCE_MODEL_INJECTOR_FILE="${SOURCE_ADAPTER_ROOT}/scripts/zhuda_model_injector.py"
 SOURCE_ENV_FILE="${SOURCE_ADAPTER_ROOT}/.env"
@@ -21,6 +23,7 @@ BUNDLED_ADAPTER_ROOT="${APP_DIR}/Resources/zhuda"
 BUNDLED_ADAPTER_FILE="${BUNDLED_ADAPTER_ROOT}/zhuda_gemini_pool_adapter.py"
 BUNDLED_MODEL_INJECTOR_FILE="${BUNDLED_ADAPTER_ROOT}/zhuda_model_injector.py"
 BUNDLED_VENV_ROOT="${BUNDLED_ADAPTER_ROOT}/python-runtime"
+BUNDLED_SKILLS_ROOT="${BUNDLED_ADAPTER_ROOT}/skills"
 BUNDLE_MODEL_PATCH_MARKER="${APP_DIR}/Resources/app.asar.zhuda-models-patched"
 ADAPTER_RUNTIME_ROOT="${SUPPORT_ROOT}/adapters/gemini"
 ADAPTER_FILE="${ADAPTER_RUNTIME_ROOT}/zhuda_gemini_pool_adapter.py"
@@ -49,6 +52,7 @@ fi
 ADAPTER_LABEL="${APP_DOMAIN}.gemini-adapter"
 LAUNCH_AGENTS_DIR="${HOME}/Library/LaunchAgents"
 ADAPTER_PLIST="${LAUNCH_AGENTS_DIR}/${ADAPTER_LABEL}.plist"
+USER_SKILLS_ROOT="${HOME}/.codex/skills"
 
 mkdir -p "$CODEX_HOME_DIR" "$USER_DATA_DIR" "$LOG_DIR" "$ADAPTER_RUNTIME_ROOT"
 
@@ -226,6 +230,47 @@ prepare_adapter_runtime() {
     /bin/cp "$SOURCE_ENV_FILE" "${ADAPTER_RUNTIME_ROOT}/.env"
     /bin/chmod 600 "${ADAPTER_RUNTIME_ROOT}/.env" || true
   fi
+}
+
+sync_portable_skills() {
+  local source=""
+  local import_setting="${ZHUDA_CODEX_IMPORT_USER_SKILLS:-}"
+  local bundled_has_skill="0"
+  local source_has_skill="0"
+  local user_has_skill="0"
+  if [[ -d "$BUNDLED_SKILLS_ROOT" ]] && /usr/bin/find "$BUNDLED_SKILLS_ROOT" -name SKILL.md -type f -print -quit | /usr/bin/grep -q .; then
+    bundled_has_skill="1"
+  fi
+  if [[ -d "$SOURCE_SKILLS_ROOT" ]] && /usr/bin/find "$SOURCE_SKILLS_ROOT" -name SKILL.md -type f -print -quit | /usr/bin/grep -q .; then
+    source_has_skill="1"
+  fi
+  if [[ -d "$USER_SKILLS_ROOT" ]] && /usr/bin/find "$USER_SKILLS_ROOT" -name SKILL.md -type f -print -quit | /usr/bin/grep -q .; then
+    user_has_skill="1"
+  fi
+
+  if [[ "$import_setting" == "1" && "$user_has_skill" == "1" ]]; then
+    source="$USER_SKILLS_ROOT"
+  elif [[ "$bundled_has_skill" == "1" ]]; then
+    source="$BUNDLED_SKILLS_ROOT"
+  elif [[ "$source_has_skill" == "1" ]]; then
+    source="$SOURCE_SKILLS_ROOT"
+  elif [[ "$import_setting" != "0" && "$user_has_skill" == "1" ]]; then
+    source="$USER_SKILLS_ROOT"
+  elif [[ -d "$BUNDLED_SKILLS_ROOT" ]]; then
+    source="$BUNDLED_SKILLS_ROOT"
+  elif [[ -d "$SOURCE_SKILLS_ROOT" ]]; then
+    source="$SOURCE_SKILLS_ROOT"
+  fi
+  if [[ -z "$source" ]]; then
+    return 0
+  fi
+
+  local tmp="${CODEX_SKILLS_DIR}.tmp.$$"
+  rm -rf "$tmp"
+  mkdir -p "$(dirname "$CODEX_SKILLS_DIR")"
+  /usr/bin/ditto "$source" "$tmp"
+  rm -rf "$CODEX_SKILLS_DIR"
+  mv "$tmp" "$CODEX_SKILLS_DIR"
 }
 
 adapter_health() {
@@ -448,11 +493,20 @@ set_codex_debug_args() {
 export CODEX_HOME="$CODEX_HOME_DIR"
 export ZHUDA_CODEX_GEMINI_APP="1"
 export ELECTRON_NO_UPDATER="1"
+export NO_UPDATE_NOTIFIER="1"
+export SQUIRREL_UPDATES_DISABLED="1"
+export OPENAI_DISABLE_AUTO_UPDATE="1"
+
+sync_portable_skills
 
 if [[ "${1:-}" == "--zhuda-dry-run" ]]; then
   choose_cdp_port
   echo "app_root=$APP_ROOT"
   echo "codex_home=$CODEX_HOME"
+  echo "codex_skills=$CODEX_SKILLS_DIR"
+  echo "bundled_skills_root=$BUNDLED_SKILLS_ROOT"
+  echo "source_skills_root=$SOURCE_SKILLS_ROOT"
+  echo "skills_ready=$([[ -d "$CODEX_SKILLS_DIR" ]] && echo 1 || echo 0)"
   echo "user_data_dir=$USER_DATA_DIR"
   echo "adapter_port=$ADAPTER_PORT"
   echo "adapter_base_url=$ADAPTER_BASE_URL"

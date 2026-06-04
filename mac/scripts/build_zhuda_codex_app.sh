@@ -68,6 +68,11 @@ cp "$PROJECT_ROOT/mac/scripts/Codex.wrapper.sh" "$WRAPPER"
 chmod +x "$WRAPPER"
 cp "$PROJECT_ROOT/mac/zhuda_gemini_pool_adapter.py" "$ZHUDA_RESOURCES/zhuda_gemini_pool_adapter.py"
 cp "$PROJECT_ROOT/mac/scripts/zhuda_model_injector.py" "$ZHUDA_RESOURCES/zhuda_model_injector.py"
+if [[ "${ZHUDA_CODEX_INCLUDE_USER_SKILLS:-0}" == "1" && -d "$HOME/.codex/skills" ]]; then
+  /usr/bin/ditto "$HOME/.codex/skills" "$ZHUDA_RESOURCES/skills"
+elif [[ -d "$PROJECT_ROOT/skills" ]]; then
+  /usr/bin/ditto "$PROJECT_ROOT/skills" "$ZHUDA_RESOURCES/skills"
+fi
 
 cat > "$ZHUDA_RESOURCES/CodexLauncher.c" <<'C'
 #include <limits.h>
@@ -137,4 +142,3 @@ if command -v codesign >/dev/null 2>&1; then
 fi
 
 echo "Zhuda-Codex app is ready: $TARGET_APP"
-
