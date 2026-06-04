@@ -6,6 +6,7 @@ import json
 import mimetypes
 import os
 import re
+import shlex
 import time
 import uuid
 from pathlib import Path
@@ -2779,6 +2780,8 @@ TEXT_TOOL_NAME_ALIASES = {
     "sh": "exec_command",
     "shell": "exec_command",
     "terminal": "exec_command",
+    "read": "exec_command",
+    "read_file": "exec_command",
 }
 TEXT_TOOL_ARGUMENT_ALIASES = {
     "exec_command": {
@@ -2833,6 +2836,17 @@ def normalize_text_tool_name(raw_name: str, declared_names: set[str]) -> Optiona
 
 def normalize_text_tool_arguments(name: str, raw_params: dict[str, str]) -> dict[str, Any]:
     aliases = TEXT_TOOL_ARGUMENT_ALIASES.get(name, {})
+    if name == "exec_command" and not any(
+        key.lower() in {"cmd", "command", "shell_command"} for key in raw_params
+    ):
+        read_path = raw_params.get("path") or raw_params.get("file") or raw_params.get("filename")
+        if read_path:
+            command = read_path_command(read_path)
+            workdir = raw_params.get("workdir") or raw_params.get("cwd")
+            arguments: dict[str, Any] = {"cmd": command}
+            if workdir:
+                arguments["workdir"] = workdir
+            return arguments
     arguments: dict[str, Any] = {}
     for raw_key, value in raw_params.items():
         key = aliases.get(raw_key.lower(), raw_key)
@@ -2856,6 +2870,15 @@ def normalize_text_tool_arguments(name: str, raw_params: dict[str, str]) -> dict
         else:
             arguments[key] = value
     return arguments
+
+
+def read_path_command(path_text: str) -> str:
+    path_value = path_text.strip()
+    if path_value.startswith("file://"):
+        parsed = urlparse(path_value)
+        if parsed.path:
+            path_value = unquote(parsed.path)
+    return f"sed -n '1,240p' {shlex.quote(path_value)}"
 
 
 def openai_provider_config(provider_id: str, declarations: list[dict[str, Any]], image_part_count: int) -> dict[str, Any]:

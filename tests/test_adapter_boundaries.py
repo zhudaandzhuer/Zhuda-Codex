@@ -127,6 +127,20 @@ def test_text_tool_markup_parsing() -> None:
     assert call == {"name": "exec_command", "arguments": {"cmd": 'rg "c_gateChu" /tmp/project'}}
 
 
+def test_text_read_tool_markup_maps_to_safe_exec_command() -> None:
+    reset_env("mimo")
+    markup = (
+        "<tool_call><function=read>"
+        "<parameter=path>file:///tmp/Zhuda%20Codex/SKILL.md</parameter>"
+        "</function></tool_call>"
+    )
+    call = adapter.function_call_from_text_tool_markup(markup, [{"name": "exec_command"}])
+    assert call == {
+        "name": "exec_command",
+        "arguments": {"cmd": "sed -n '1,240p' '/tmp/Zhuda Codex/SKILL.md'"},
+    }
+
+
 def test_visible_models_are_direct_identity_aliases() -> None:
     reset_env("mimo")
     os.environ["ZHUDA_VISIBLE_MODELS"] = "mimo-v2.5-pro,mimo-v2.5"
@@ -171,6 +185,7 @@ def main() -> None:
         test_gemini_tpm_429_is_short_wait_not_daily,
         test_gemini_daily_429_is_visible_daily_quota,
         test_text_tool_markup_parsing,
+        test_text_read_tool_markup_maps_to_safe_exec_command,
         test_visible_models_are_direct_identity_aliases,
         test_deepseek_visible_models_are_direct_identity_aliases,
         test_openai_chat_parser_does_not_surface_reasoning_content,
