@@ -1949,12 +1949,23 @@ function Start-ModelInjector {
         Write-ErrorLog "Model injector script not found."
         return
     }
+    try {
+        Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+            Where-Object {
+                $_.ProcessId -ne $PID -and
+                $_.CommandLine -and
+                $_.CommandLine -match "zhuda_model_injector\.ps1"
+            } |
+            ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+        Start-Sleep -Milliseconds 200
+    } catch {}
     $models = (Get-VisibleModelNames) -join ","
     if (-not $models) { return }
     $providerName = if ($Provider -eq "mimo") { "Xiaomi MiMo" } else { "Gemini" }
     $ps = (Get-Process -Id $PID).Path
     if (-not $ps) { $ps = "powershell.exe" }
     $errPath = Join-Path $RuntimeDir "model-injector.err.log"
+    Remove-Item $ModelInjectorLogPath, $errPath -Force -ErrorAction SilentlyContinue
     $args = @(
         "-NoProfile",
         "-ExecutionPolicy", "Bypass",
@@ -1963,7 +1974,8 @@ function Start-ModelInjector {
         "-Models", $models,
         "-DefaultModel", $GeminiModel,
         "-ProviderName", $providerName,
-        "-DurationSeconds", "25"
+        "-DurationSeconds", "0",
+        "-IdleExitSeconds", "300"
     )
     Start-Process -FilePath $ps -ArgumentList $args -WindowStyle Hidden -RedirectStandardOutput $ModelInjectorLogPath -RedirectStandardError $errPath | Out-Null
 }

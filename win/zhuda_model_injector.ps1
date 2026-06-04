@@ -5,7 +5,8 @@ param(
     [string]$DefaultModel = "",
     [string]$ProviderName = "Zhuda-Codex",
     [int]$DurationSeconds = 75,
-    [int]$IntervalMilliseconds = 1200
+    [int]$IntervalMilliseconds = 1200,
+    [int]$IdleExitSeconds = 300
 )
 
 Set-StrictMode -Off
@@ -431,24 +432,49 @@ if (-not ($modelNames -contains $DefaultModel)) {
 }
 
 $expression = New-InjectionExpression $modelNames $DefaultModel $ProviderName
-$deadline = [DateTime]::UtcNow.AddSeconds([Math]::Max(1, $DurationSeconds))
+$runForever = $DurationSeconds -le 0
+$deadline = if ($runForever) { [DateTime]::MaxValue } else { [DateTime]::UtcNow.AddSeconds([Math]::Max(1, $DurationSeconds)) }
+$startedAt = [DateTime]::UtcNow
+$lastSeenAt = $null
+$lastLogAt = [DateTime]::MinValue
+$lastMissLogAt = [DateTime]::MinValue
 $seq = 1
 $total = 0
-while ([DateTime]::UtcNow -lt $deadline) {
+while ($runForever -or [DateTime]::UtcNow -lt $deadline) {
+    $now = [DateTime]::UtcNow
     $count = 0
+    $targetCount = 0
     foreach ($target in (Get-DevToolsTargets $Port)) {
         $wsUrl = [string]$target.webSocketDebuggerUrl
         $type = [string]$target.type
         if (-not $wsUrl -or @("page", "webview", "other") -notcontains $type) { continue }
+        $targetCount += 1
         try {
             Send-CdpEvaluate $wsUrl $expression $seq
             $count += 1
         } catch {}
         $seq += 1
     }
+    if ($targetCount -gt 0) {
+        $lastSeenAt = $now
+    }
     if ($count -gt 0) {
+        $shouldLog = ($total -eq 0) -or (($now - $lastLogAt).TotalSeconds -ge 30)
         $total += $count
-        Write-Output ("injected models into {0} target(s): {1}" -f $count, ($modelNames -join ", "))
+        if ($shouldLog) {
+            Write-Output ("injected models into {0} target(s): {1}" -f $count, ($modelNames -join ", "))
+            $lastLogAt = $now
+        }
+    } elseif ($runForever) {
+        $reference = if ($lastSeenAt) { $lastSeenAt } else { $startedAt }
+        if (($now - $reference).TotalSeconds -ge [Math]::Max(60, $IdleExitSeconds)) {
+            Write-Output ("no DevTools target for {0}s; stopping model injector" -f [Math]::Max(60, $IdleExitSeconds))
+            break
+        }
+        if (($now - $lastMissLogAt).TotalSeconds -ge 60) {
+            Write-Output ("waiting for DevTools target on port {0}" -f $Port)
+            $lastMissLogAt = $now
+        }
     }
     Start-Sleep -Milliseconds ([Math]::Max(250, $IntervalMilliseconds))
 }

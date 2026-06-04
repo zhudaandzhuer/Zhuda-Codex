@@ -483,6 +483,7 @@ def main() -> int:
     parser.add_argument("--provider-name", default="Zhuda-Codex")
     parser.add_argument("--duration", type=float, default=75.0)
     parser.add_argument("--interval", type=float, default=1.5)
+    parser.add_argument("--idle-exit-seconds", type=float, default=300.0)
     parser.add_argument("--host", action="append", default=[])
     args = parser.parse_args()
 
@@ -496,14 +497,36 @@ def main() -> int:
         models.insert(0, default_model)
     expression = injection_expression(models, default_model, args.provider_name)
 
-    deadline = time.monotonic() + max(1.0, args.duration)
+    run_forever = args.duration <= 0
+    deadline = float("inf") if run_forever else time.monotonic() + max(1.0, args.duration)
+    started_at = time.monotonic()
+    last_seen_at: float | None = None
+    last_log_at = 0.0
+    last_miss_log_at = 0.0
     seq = 1
     injected = 0
-    while time.monotonic() < deadline:
+    while run_forever or time.monotonic() < deadline:
+        now = time.monotonic()
+        targets = devtools_targets(args.port, hosts)
+        target_count = sum(1 for target in targets if target.get("webSocketDebuggerUrl") and target.get("type") in {"page", "webview", "other"})
         count = inject_once(args.port, hosts, expression, seq)
+        if target_count:
+            last_seen_at = now
         if count:
+            should_log = injected == 0 or (now - last_log_at) >= 30.0
             injected += count
-            print(f"injected models into {count} target(s): {', '.join(models)}", flush=True)
+            if should_log:
+                print(f"injected models into {count} target(s): {', '.join(models)}", flush=True)
+                last_log_at = now
+        elif run_forever:
+            reference = last_seen_at if last_seen_at is not None else started_at
+            idle_limit = max(60.0, args.idle_exit_seconds)
+            if now - reference >= idle_limit:
+                print(f"no DevTools target for {idle_limit:.0f}s; stopping model injector", flush=True)
+                break
+            if now - last_miss_log_at >= 60.0:
+                print(f"waiting for DevTools target on port {args.port}", flush=True)
+                last_miss_log_at = now
         seq += 1
         time.sleep(max(0.2, args.interval))
     print(f"done; injection attempts succeeded for {injected} target(s)", flush=True)

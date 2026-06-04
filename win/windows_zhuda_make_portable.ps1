@@ -232,15 +232,27 @@ function Start-DetachedProcess {
 function Start-ModelInjector {
     param([int]$CdpPort, [string]$SelectedModel)
     if (-not (Test-Path $Injector)) { return }
+    try {
+        Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+            Where-Object {
+                $_.ProcessId -ne $PID -and
+                $_.CommandLine -and
+                $_.CommandLine -match "zhuda_model_injector\.ps1"
+            } |
+            ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+        Start-Sleep -Milliseconds 200
+    } catch {}
     $models = [string]$env:ZHUDA_VISIBLE_MODELS
     if (-not $models) { $models = $SelectedModel }
+    Remove-Item $ModelInjectorLogPath, $ModelInjectorErrPath -Force -ErrorAction SilentlyContinue
     Start-Process -FilePath "powershell.exe" -ArgumentList @(
         "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $Injector,
         "-Port", "$CdpPort",
         "-Models", $models,
         "-DefaultModel", $SelectedModel,
         "-ProviderName", "Zhuda-Codex",
-        "-DurationSeconds", "25"
+        "-DurationSeconds", "0",
+        "-IdleExitSeconds", "300"
     ) -WindowStyle Hidden -RedirectStandardOutput $ModelInjectorLogPath -RedirectStandardError $ModelInjectorErrPath | Out-Null
 }
 

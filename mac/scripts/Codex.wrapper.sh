@@ -414,7 +414,7 @@ start_model_injector() {
   fi
   local selected_model="${ZHUDA_SELECTED_CODEX_MODEL:-${ZHUDA_SELECTED_UPSTREAM_MODEL:-}}"
   local provider_name="${ZHUDA_PROVIDER:-Zhuda-Codex}"
-  local duration="${ZHUDA_MODEL_INJECT_DURATION_SECONDS:-75}"
+  local duration="${ZHUDA_MODEL_INJECT_DURATION_SECONDS:-0}"
   (
     sleep 0.8
     exec "$ADAPTER_RUNNER" "$MODEL_INJECTOR_FILE" \
