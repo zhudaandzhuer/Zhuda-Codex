@@ -28,7 +28,13 @@ adapter = load_adapter()
 
 def reset_env(provider: str = "mimo") -> None:
     for key in list(os.environ):
-        if key.startswith("ZHUDA_") or key.startswith("GEMINI_") or key.startswith("MIMO_") or key.startswith("XIAOMI_MIMO_"):
+        if (
+            key.startswith("ZHUDA_")
+            or key.startswith("GEMINI_")
+            or key.startswith("MIMO_")
+            or key.startswith("XIAOMI_MIMO_")
+            or key.startswith("DEEPSEEK_")
+        ):
             os.environ.pop(key, None)
     os.environ["ZHUDA_DOTENV_PATH"] = "/tmp/zhuda-codex-test-env-does-not-exist"
     os.environ["ZHUDA_PROVIDER"] = provider
@@ -72,6 +78,43 @@ def test_mimo_cooldown_visible_message() -> None:
     assert "沒有再燒請求" in text
 
 
+def test_gemini_tpm_429_is_short_wait_not_daily() -> None:
+    reset_env("gemini")
+    raw = """
+    {
+      "error": {
+        "code": 429,
+        "message": "Quota exceeded for quota metric 'Generate Content Input Tokens Per Model Per Minute'",
+        "details": [
+          {"@type": "type.googleapis.com/google.rpc.RetryInfo", "retryDelay": "3.700s"},
+          {"quotaId": "GenerateContentInputTokensPerModelPerMinute-FreeTier"}
+        ]
+      }
+    }
+    """
+    assert adapter.is_short_rate_limit_error(raw)
+    assert not adapter.is_daily_quota_error(raw)
+    assert adapter.retry_delay_seconds_from_error(raw, 45) == 4
+
+
+def test_gemini_daily_429_is_visible_daily_quota() -> None:
+    reset_env("gemini")
+    raw = """
+    {
+      "error": {
+        "code": 429,
+        "message": "Quota exceeded for quota metric 'Generate Requests Per Day'",
+        "details": [{"quotaId": "GenerateRequestsPerDayPerProjectPerModel-FreeTier"}]
+      }
+    }
+    """
+    assert adapter.is_daily_quota_error(raw)
+    error = HTTPException(status_code=429, detail={"error": "gemini_daily_quota_exhausted", "details": [f"gemini-3.5-flash:key_1:429:daily_quota_exhausted:{raw}"]})
+    text = adapter.visible_error_text("gpt-5.4", "gemini-3.5-flash", error, 0, 0)
+    assert "daily quota exhausted" in text
+    assert "日額度用完" in text
+
+
 def test_text_tool_markup_parsing() -> None:
     reset_env("mimo")
     markup = (
@@ -84,12 +127,53 @@ def test_text_tool_markup_parsing() -> None:
     assert call == {"name": "exec_command", "arguments": {"cmd": 'rg "c_gateChu" /tmp/project'}}
 
 
+def test_visible_models_are_direct_identity_aliases() -> None:
+    reset_env("mimo")
+    os.environ["ZHUDA_VISIBLE_MODELS"] = "mimo-v2.5-pro,mimo-v2.5"
+    aliases = adapter.model_aliases()
+    assert adapter.visible_model_ids() == ["mimo-v2.5-pro", "mimo-v2.5"]
+    assert aliases["mimo-v2.5-pro"] == "mimo-v2.5-pro"
+    assert aliases["mimo-v2.5"] == "mimo-v2.5"
+
+
+def test_deepseek_visible_models_are_direct_identity_aliases() -> None:
+    reset_env("deepseek")
+    os.environ["ZHUDA_VISIBLE_MODELS"] = "deepseek-v4-pro,deepseek-v4-flash"
+    aliases = adapter.model_aliases()
+    assert adapter.visible_model_ids() == ["deepseek-v4-pro", "deepseek-v4-flash"]
+    assert adapter.resolve_model("gpt-5.5") == "deepseek-v4-pro"
+    assert adapter.resolve_model("gpt-5.4-mini") == "deepseek-v4-flash"
+    assert adapter.resolve_model("gemini-3.5-flash") == "deepseek-v4-pro"
+    assert aliases["deepseek-v4-pro"] == "deepseek-v4-pro"
+    assert aliases["deepseek-v4-flash"] == "deepseek-v4-flash"
+
+
+def test_openai_chat_parser_does_not_surface_reasoning_content() -> None:
+    payload = {
+        "choices": [
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": "",
+                    "reasoning_content": "hidden analysis draft",
+                }
+            }
+        ]
+    }
+    assert adapter.output_text_from_openai_chat(payload) == ""
+
+
 def main() -> None:
     tests = [
         test_mimo_context_budget,
         test_mimo_timeout_visible_message,
         test_mimo_cooldown_visible_message,
+        test_gemini_tpm_429_is_short_wait_not_daily,
+        test_gemini_daily_429_is_visible_daily_quota,
         test_text_tool_markup_parsing,
+        test_visible_models_are_direct_identity_aliases,
+        test_deepseek_visible_models_are_direct_identity_aliases,
+        test_openai_chat_parser_does_not_surface_reasoning_content,
     ]
     for test in tests:
         test()

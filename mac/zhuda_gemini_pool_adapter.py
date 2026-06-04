@@ -20,6 +20,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 ROOT = Path(__file__).resolve().parent
 GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
 MIMO_BASE_URL = "https://api.xiaomimimo.com/v1"
+DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 DEFAULT_MODEL = "zhuda-codex"
 LOCAL_BEARER = "zhuda-codex-local-token"
 RETRYABLE_UPSTREAM_STATUSES = {408, 429, 500, 502, 503, 504}
@@ -32,12 +33,16 @@ DEFAULT_MIMO_MAX_PINNED_TOKENS = 3500
 DEFAULT_MIMO_MAX_HISTORY_ITEM_TOKENS = 1200
 DEFAULT_MIMO_MAX_TOOL_OUTPUT_CHARS = 1200
 DEFAULT_MIMO_MAX_OUTPUT_TOKENS = 2048
+DEFAULT_DEEPSEEK_MAX_OUTPUT_TOKENS = 4096
 DEFAULT_MAX_KEY_ATTEMPTS = 2
-DEFAULT_MAX_MODEL_ATTEMPTS = 2
+DEFAULT_MAX_MODEL_ATTEMPTS = 1
 DEFAULT_UPSTREAM_TIMEOUT_SECONDS = 60
 DEFAULT_MIMO_UPSTREAM_TIMEOUT_SECONDS = 90
+DEFAULT_DEEPSEEK_UPSTREAM_TIMEOUT_SECONDS = 120
 DEFAULT_RATE_LIMIT_COOLDOWN_SECONDS = 45
 DEFAULT_MIMO_RATE_LIMIT_COOLDOWN_SECONDS = 120
+DEFAULT_RATE_LIMIT_MAX_WAIT_SECONDS = 3600
+DEFAULT_STREAM_HEARTBEAT_INTERVAL_SECONDS = 8
 DEFAULT_ERROR_COOLDOWN_SECONDS = 10
 DEFAULT_MIMO_ERROR_COOLDOWN_SECONDS = 45
 DEFAULT_MIMO_TIMEOUT_COOLDOWN_SECONDS = 90
@@ -66,13 +71,10 @@ DEFAULT_MODEL_MIN_INTERVAL_SECONDS = {
     "gemini-3-flash-preview": 12.0,
     "mimo-v2.5-pro": 12.0,
     "mimo-v2.5": 8.0,
+    "deepseek-v4-pro": 8.0,
+    "deepseek-v4-flash": 4.0,
 }
-DEFAULT_FALLBACK_UPSTREAM_MODELS = [
-    "gemini-3.5-flash",
-    "gemini-3-flash-preview",
-    "gemma-4-26b-a4b-it",
-    "gemma-4-31b-it",
-]
+DEFAULT_FALLBACK_UPSTREAM_MODELS: list[str] = []
 EXECUTION_VERIFICATION_PROMPT = """
 [Zhuda assistant behavior rules]
 - Treat these rules as system instructions, not user content.
@@ -112,6 +114,7 @@ VISUAL_INTENT_RE = re.compile(
 app = FastAPI()
 cursor = 0
 cooldowns: dict[tuple[str, int], float] = {}
+cooldown_reasons: dict[tuple[str, int], str] = {}
 last_upstream_call_at = 0.0
 last_model_call_at: dict[str, float] = {}
 upstream_state_lock = asyncio.Lock()
@@ -133,7 +136,7 @@ LOG_TAIL_DEFAULT_LINES = 200
 LOG_TAIL_MAX_LINES = 1000
 LOG_TAIL_MAX_BYTES = 512_000
 API_KEY_RE = re.compile(r"(AIza[0-9A-Za-z_-]{20,}|AQ\.[0-9A-Za-z_-]{20,}|sk-[0-9A-Za-z_-]{20,})")
-ENV_KEY_RE = re.compile(r"((?:GEMINI|MIMO|XIAOMI_MIMO)_API_KEY_\d+\s*=\s*)([^\s,\"]+)")
+ENV_KEY_RE = re.compile(r"((?:GEMINI|MIMO|XIAOMI_MIMO|DEEPSEEK)_API_KEY_\d+\s*=\s*)([^\s,\"]+)")
 
 
 LOG_DASHBOARD_HTML = """<!doctype html>
@@ -513,6 +516,8 @@ def current_provider() -> str:
     raw = os.environ.get("ZHUDA_PROVIDER", "gemini").strip().lower()
     if raw in {"mimo", "xiaomi", "xiaomi_mimo", "xiaomi-mimo"}:
         return "mimo"
+    if raw in {"deepseek", "deepseek_official", "deepseek-official"}:
+        return "deepseek"
     return "gemini"
 
 
@@ -520,6 +525,8 @@ def provider_display_name(provider: Optional[str] = None) -> str:
     provider = provider or current_provider()
     if provider == "mimo":
         return "Xiaomi MiMo"
+    if provider == "deepseek":
+        return "DeepSeek"
     return "Gemini"
 
 
@@ -532,6 +539,9 @@ def provider_keys(provider: Optional[str] = None) -> list[str]:
         for index in range(1, 11):
             names.extend([f"MIMO_API_KEY_{index}", f"XIAOMI_MIMO_API_KEY_{index}"])
         names.extend(["MIMO_API_KEY", "XIAOMI_MIMO_API_KEY", "ZHUDA_MIMO_API_KEY"])
+    elif provider == "deepseek":
+        names = [f"DEEPSEEK_API_KEY_{index}" for index in range(1, 11)]
+        names.extend(["DEEPSEEK_API_KEY", "ZHUDA_DEEPSEEK_API_KEY"])
     else:
         names = [f"GEMINI_API_KEY_{index}" for index in range(1, 11)]
         names.extend(["GEMINI_API_KEY", "ZHUDA_GEMINI_API_KEY"])
@@ -552,8 +562,13 @@ def mimo_keys() -> list[str]:
     return provider_keys("mimo")
 
 
+def deepseek_keys() -> list[str]:
+    return provider_keys("deepseek")
+
+
 def default_model_aliases() -> dict[str, str]:
-    if current_provider() == "mimo":
+    provider = current_provider()
+    if provider == "mimo":
         return {
             "zhuda-codex": "mimo-v2.5-pro",
             "gemini-codex": "mimo-v2.5-pro",
@@ -564,6 +579,18 @@ def default_model_aliases() -> dict[str, str]:
             "gpt-5.2": "mimo-v2.5",
             "mimo-v2.5-pro": "mimo-v2.5-pro",
             "mimo-v2.5": "mimo-v2.5",
+        }
+    if provider == "deepseek":
+        return {
+            "zhuda-codex": "deepseek-v4-pro",
+            "gemini-codex": "deepseek-v4-pro",
+            "gpt-5.5": "deepseek-v4-pro",
+            "gpt-5.4": "deepseek-v4-pro",
+            "gpt-5.4-mini": "deepseek-v4-flash",
+            "gpt-5.3-codex": "deepseek-v4-pro",
+            "gpt-5.2": "deepseek-v4-flash",
+            "deepseek-v4-pro": "deepseek-v4-pro",
+            "deepseek-v4-flash": "deepseek-v4-flash",
         }
     return {
         "zhuda-codex": "gemma-4-31b-it",
@@ -615,16 +642,65 @@ def parse_model_mapping_env(raw: str) -> dict[str, str]:
     return parsed
 
 
+def parse_model_list_env(raw: str) -> list[str]:
+    raw = raw.strip()
+    if not raw:
+        return []
+    values: list[str] = []
+    if raw.startswith("["):
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            parsed = []
+        if isinstance(parsed, list):
+            values = [str(item).strip() for item in parsed]
+    else:
+        values = [item.strip() for item in raw.split(",")]
+    unique: list[str] = []
+    seen = set()
+    for value in values:
+        if value and value not in seen:
+            unique.append(value)
+            seen.add(value)
+    return unique
+
+
+def visible_model_ids() -> list[str]:
+    load_dotenv()
+    provider = current_provider()
+    names = ["ZHUDA_VISIBLE_MODELS"]
+    if provider == "mimo":
+        names.insert(0, "ZHUDA_MIMO_VISIBLE_MODELS")
+    elif provider == "deepseek":
+        names.insert(0, "ZHUDA_DEEPSEEK_VISIBLE_MODELS")
+    else:
+        names.insert(0, "ZHUDA_GEMINI_VISIBLE_MODELS")
+    for name in names:
+        models = parse_model_list_env(os.environ.get(name, ""))
+        if models:
+            return models
+    return list(model_aliases().keys())
+
+
 def model_aliases() -> dict[str, str]:
     load_dotenv()
     aliases = default_model_aliases()
     provider = current_provider()
     if provider == "mimo":
         env_names = ["ZHUDA_MIMO_MODELS", "ZHUDA_MODEL_MAPPINGS"]
+        provider_visible_env = "ZHUDA_MIMO_VISIBLE_MODELS"
+    elif provider == "deepseek":
+        env_names = ["ZHUDA_DEEPSEEK_MODELS", "ZHUDA_MODEL_MAPPINGS"]
+        provider_visible_env = "ZHUDA_DEEPSEEK_VISIBLE_MODELS"
     else:
         env_names = ["ZHUDA_GEMINI_MODELS", "ZHUDA_MODEL_MAPPINGS"]
+        provider_visible_env = "ZHUDA_GEMINI_VISIBLE_MODELS"
     for env_name in env_names:
         aliases.update(parse_model_mapping_env(os.environ.get(env_name, "")))
+    for model in parse_model_list_env(os.environ.get("ZHUDA_VISIBLE_MODELS", "")):
+        aliases.setdefault(model, model)
+    for model in parse_model_list_env(os.environ.get(provider_visible_env, "")):
+        aliases.setdefault(model, model)
     return aliases
 
 
@@ -637,6 +713,15 @@ def mimo_base_url() -> str:
     ).rstrip("/")
 
 
+def deepseek_base_url() -> str:
+    load_dotenv()
+    return (
+        os.environ.get("DEEPSEEK_BASE_URL", "").strip()
+        or os.environ.get("ZHUDA_DEEPSEEK_BASE_URL", "").strip()
+        or DEEPSEEK_BASE_URL
+    ).rstrip("/")
+
+
 def forced_upstream_model() -> Optional[str]:
     load_dotenv()
     raw = os.environ.get("ZHUDA_FORCE_UPSTREAM_MODEL", "").strip()
@@ -644,11 +729,22 @@ def forced_upstream_model() -> Optional[str]:
         return None
     provider = current_provider()
     lowered = raw.lower()
-    if provider == "mimo" and lowered.startswith(("gemini-", "gemma-", "models/")):
+    if provider == "mimo" and lowered.startswith(("gemini-", "gemma-", "models/", "deepseek-")):
         return None
-    if provider == "gemini" and lowered.startswith("mimo-"):
+    if provider == "gemini" and lowered.startswith(("mimo-", "deepseek-")):
+        return None
+    if provider == "deepseek" and lowered.startswith(("gemini-", "gemma-", "models/", "mimo-")):
         return None
     return raw
+
+
+def is_provider_direct_model(model: str, provider: str) -> bool:
+    lowered = model.lower()
+    if provider == "mimo":
+        return lowered.startswith("mimo-")
+    if provider == "deepseek":
+        return lowered.startswith("deepseek-")
+    return lowered.startswith(("gemini-", "gemma-", "models/"))
 
 
 def resolve_model(model: Optional[str]) -> str:
@@ -660,9 +756,12 @@ def resolve_model(model: Optional[str]) -> str:
     aliases = model_aliases()
     if requested in aliases:
         return aliases[requested]
-    if requested.startswith(("gemini-", "gemma-", "models/", "mimo-")):
+    if is_provider_direct_model(requested, provider):
         return requested
-    fallback = "mimo-v2.5-pro" if provider == "mimo" else "gemma-4-31b-it"
+    fallback = {
+        "mimo": "mimo-v2.5-pro",
+        "deepseek": "deepseek-v4-pro",
+    }.get(provider, "gemma-4-31b-it")
     return aliases.get(DEFAULT_MODEL, fallback)
 
 
@@ -690,8 +789,14 @@ def env_bool(name: str, default: bool = False) -> bool:
     return default
 
 
-def provider_env_int(name: str, default: int, mimo_default: int) -> int:
-    default_value = mimo_default if current_provider() == "mimo" else default
+def provider_env_int(name: str, default: int, mimo_default: int, deepseek_default: Optional[int] = None) -> int:
+    provider = current_provider()
+    if provider == "mimo":
+        default_value = mimo_default
+    elif provider == "deepseek" and deepseek_default is not None:
+        default_value = deepseek_default
+    else:
+        default_value = default
     return env_int(name, default_value)
 
 
@@ -724,6 +829,7 @@ def upstream_timeout_seconds() -> int:
         "ZHUDA_UPSTREAM_TIMEOUT_SECONDS",
         DEFAULT_UPSTREAM_TIMEOUT_SECONDS,
         DEFAULT_MIMO_UPSTREAM_TIMEOUT_SECONDS,
+        DEFAULT_DEEPSEEK_UPSTREAM_TIMEOUT_SECONDS,
     )
 
 
@@ -776,6 +882,30 @@ def large_prompt_rate_limit_cooldown_seconds() -> int:
     )
 
 
+def rate_limit_max_wait_seconds() -> int:
+    return env_int("ZHUDA_RATE_LIMIT_MAX_WAIT_SECONDS", DEFAULT_RATE_LIMIT_MAX_WAIT_SECONDS)
+
+
+def stream_heartbeat_interval_seconds() -> float:
+    return max(
+        1.0,
+        min(
+            30.0,
+            env_int("ZHUDA_STREAM_HEARTBEAT_INTERVAL_MS", DEFAULT_STREAM_HEARTBEAT_INTERVAL_SECONDS * 1000) / 1000,
+        ),
+    )
+
+
+def set_cooldown(cooldown_key: tuple[str, int], seconds: float, reason: str) -> None:
+    cooldowns[cooldown_key] = time.monotonic() + max(0.0, seconds)
+    cooldown_reasons[cooldown_key] = reason
+
+
+def clear_cooldown(cooldown_key: tuple[str, int]) -> None:
+    cooldowns.pop(cooldown_key, None)
+    cooldown_reasons.pop(cooldown_key, None)
+
+
 def cooldown_remaining_seconds(candidates: list[str], key_count: int) -> int:
     now = time.monotonic()
     remaining = [
@@ -788,6 +918,154 @@ def cooldown_remaining_seconds(candidates: list[str], key_count: int) -> int:
     return max(remaining) if remaining else 0
 
 
+def iter_json_strings(value: Any):
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for item in value.values():
+            yield from iter_json_strings(item)
+    elif isinstance(value, list):
+        for item in value:
+            yield from iter_json_strings(item)
+
+
+def parse_json_object(text: str) -> Optional[dict[str, Any]]:
+    try:
+        value = json.loads(text)
+    except (TypeError, ValueError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def safe_upstream_text(text: str, max_chars: int = 12000) -> str:
+    cleaned = API_KEY_RE.sub("<redacted-api-key>", str(text or "")).strip()
+    cleaned = ENV_KEY_RE.sub(r"\1<redacted-api-key>", cleaned)
+    if len(cleaned) <= max_chars:
+        return cleaned
+    return (
+        cleaned[:max_chars]
+        + f"\n...[upstream message truncated by Zhuda adapter: {len(cleaned)} chars]..."
+    )
+
+
+def pretty_upstream_text(text: str) -> str:
+    cleaned = safe_upstream_text(text)
+    payload = parse_json_object(cleaned)
+    if payload is None:
+        return cleaned
+    return json.dumps(payload, ensure_ascii=False, indent=2)
+
+
+def upstream_error_text(model: str, key_index: int, status_code: int, body: str) -> str:
+    return f"{model}:key_{key_index}:{status_code}:{safe_upstream_text(body)}"
+
+
+def upstream_error_messages(details: list[str]) -> list[str]:
+    messages: list[str] = []
+    for detail in details:
+        text = str(detail or "")
+        match = re.match(r"^[^:]+:key_\d+:(?:[1-5][0-9]{2}):(?:[a-z_]+:)?(.*)$", text, re.DOTALL)
+        if match:
+            messages.append(pretty_upstream_text(match.group(1)))
+        else:
+            messages.append(safe_upstream_text(text))
+    out: list[str] = []
+    seen: set[str] = set()
+    for message in messages:
+        if message and message not in seen:
+            out.append(message)
+            seen.add(message)
+    return out
+
+
+def retry_delay_seconds_from_error(raw_text: str, fallback_seconds: int) -> int:
+    delays: list[float] = []
+    payload = parse_json_object(raw_text)
+    strings = list(iter_json_strings(payload)) if payload else []
+    strings.append(raw_text)
+    for text in strings:
+        for match in re.finditer(r'"retryDelay"\s*:\s*"([0-9]+(?:\.[0-9]+)?)s"', text, re.IGNORECASE):
+            delays.append(float(match.group(1)))
+        for match in re.finditer(r"\bretry\s*(?:in|after|delay)?\s*[:=]?\s*([0-9]+(?:\.[0-9]+)?)\s*s", text, re.IGNORECASE):
+            delays.append(float(match.group(1)))
+        if re.fullmatch(r"[0-9]+(?:\.[0-9]+)?s", text.strip()):
+            delays.append(float(text.strip()[:-1]))
+    if not delays:
+        return max(1, fallback_seconds)
+    return max(1, int(max(delays) + 0.999))
+
+
+def normalized_quota_text(raw_text: str) -> str:
+    payload = parse_json_object(raw_text)
+    parts = list(iter_json_strings(payload)) if payload else []
+    parts.append(raw_text)
+    return " ".join(parts).lower()
+
+
+def is_daily_quota_error(raw_text: str) -> bool:
+    text = normalized_quota_text(raw_text)
+    compact = re.sub(r"[^a-z0-9]+", "", text)
+    return any(
+        marker in text or marker in compact
+        for marker in (
+            "per day",
+            "requests per day",
+            "request per day",
+            "daily",
+            "rpd",
+            "perday",
+            "requestsperday",
+            "generaterequestsperday",
+            "generatecontentrequestsperday",
+        )
+    )
+
+
+def is_short_rate_limit_error(raw_text: str) -> bool:
+    if is_daily_quota_error(raw_text):
+        return False
+    text = normalized_quota_text(raw_text)
+    compact = re.sub(r"[^a-z0-9]+", "", text)
+    return any(
+        marker in text or marker in compact
+        for marker in (
+            "retrydelay",
+            "retry delay",
+            "retry in",
+            "per minute",
+            "perminute",
+            "requests per minute",
+            "requestsperminute",
+            "tokens per minute",
+            "tokensperminute",
+            "input tokens",
+            "inputtokens",
+            "output tokens",
+            "outputtokens",
+            "tpm",
+            "rpm",
+            "burst",
+            "too many requests",
+            "rate limit",
+        )
+    )
+
+
+def rate_limit_wait_seconds(raw_text: str, fallback_seconds: int, is_large_prompt: bool) -> int:
+    fallback = max(1, fallback_seconds)
+    if is_large_prompt:
+        fallback = max(fallback, large_prompt_rate_limit_cooldown_seconds())
+    return retry_delay_seconds_from_error(raw_text, fallback)
+
+
+async def sleep_for_short_rate_limit(seconds: int) -> None:
+    remaining = max(1, seconds)
+    while remaining > 0:
+        chunk = min(remaining, 30)
+        await asyncio.sleep(chunk)
+        remaining -= chunk
+
+
 def upstream_model_candidates(model: str) -> list[str]:
     load_dotenv()
     forced = forced_upstream_model()
@@ -798,6 +1076,9 @@ def upstream_model_candidates(model: str) -> list[str]:
     if provider == "mimo":
         env_name = "ZHUDA_MIMO_FALLBACK_MODELS"
         default_fallbacks: list[str] = []
+    elif provider == "deepseek":
+        env_name = "ZHUDA_DEEPSEEK_FALLBACK_MODELS"
+        default_fallbacks = []
     else:
         env_name = "ZHUDA_GEMINI_FALLBACK_MODELS"
         default_fallbacks = DEFAULT_FALLBACK_UPSTREAM_MODELS
@@ -945,7 +1226,7 @@ def log_pool_attempt(model: str, key_index: int, status: int, ok: bool, error: s
         "key_index": key_index,
         "status": status,
         "ok": ok,
-        "error": error[:180],
+        "error": safe_upstream_text(error),
     }
     try:
         with (ROOT / "adapter.pool.jsonl").open("a") as handle:
@@ -1960,8 +2241,11 @@ def clean_model_meta_text(text: str) -> str:
         if re.fullmatch(r'(?is).*(reply with ["“]?OK["”]?|reply OK only).*', text) and cleaned.endswith("OK"):
             return "OK"
         return (
-            "Gemma 4 31B 這輪輸出的是分析稿，沒有產生可用答案。"
-            "這通常是模型在長上下文或工具任務裡指令遵循失穩；請重試一次，或先用 /compact 開新上下文。"
+            "上游模型這輪回了 HTTP 200，但輸出被 Zhuda adapter 判定為分析稿，沒有產生可用答案。\n\n"
+            "Zhuda adapter 解釋\n"
+            "- 這不是 API 斷線，也不是額度錯誤。\n"
+            "- adapter 沒有自動切換模型；你選哪個模型，這輪就只使用哪個模型。\n"
+            "- 這通常是模型在長上下文或工具任務裡指令遵循失穩。請重試一次，或先用 /compact 開新上下文。"
         )
     cjk_match = CJK_RE.search(cleaned)
     if cjk_match and META_PREFIX_RE.match(cleaned):
@@ -2200,21 +2484,39 @@ async def call_gemini(
     candidates = upstream_model_candidates(model)[:max(1, max_model_attempts)]
     attempted = 0
     skipped_cooldown = 0
+    daily_quota_errors: list[str] = []
+    rate_limit_waited = 0.0
 
     upstream_timeout = upstream_timeout_seconds()
     async with upstream_state_lock:
         async with httpx.AsyncClient(timeout=upstream_timeout) as client:
             for candidate_model in candidates:
                 candidate_attempts = 0
-                for offset in range(len(keys)):
+                offset = 0
+                while offset < len(keys):
                     if candidate_attempts >= max_key_attempts:
                         break
                     key_index = (started + offset) % len(keys)
                     cooldown_key = (candidate_model, key_index)
                     now = time.monotonic()
-                    if cooldowns.get(cooldown_key, 0) > now:
-                        skipped_cooldown += 1
-                        continue
+                    cooldown_until = cooldowns.get(cooldown_key, 0)
+                    if cooldown_until > now:
+                        reason = cooldown_reasons.get(cooldown_key, "")
+                        if reason == "daily_quota":
+                            daily_quota_errors.append(f"{candidate_model}:key_{key_index + 1}:429:daily_quota_cooldown")
+                            skipped_cooldown += 1
+                            offset += 1
+                            continue
+                        wait_seconds = int(cooldown_until - now + 0.999)
+                        rate_limit_waited += wait_seconds
+                        if rate_limit_waited > rate_limit_max_wait_seconds():
+                            errors.append(f"{candidate_model}:key_{key_index + 1}:429:short_rate_limit_wait_exceeded")
+                            offset += 1
+                            continue
+                        log_pool_attempt(candidate_model, key_index + 1, 0, False, f"short_rate_limit_wait:{wait_seconds}s")
+                        await sleep_for_short_rate_limit(wait_seconds)
+                        clear_cooldown(cooldown_key)
+                        now = time.monotonic()
                     key = keys[key_index]
                     url = f"{GEMINI_BASE_URL}/models/{candidate_model}:generateContent"
                     model_interval = model_min_interval_seconds(candidate_model)
@@ -2238,13 +2540,15 @@ async def call_gemini(
                         error_text = f"{candidate_model}:key_{key_index + 1}:timeout_after_{upstream_timeout}s:{error}"
                         errors.append(error_text)
                         log_pool_attempt(candidate_model, key_index + 1, 0, False, error_text)
-                        cooldowns[cooldown_key] = time.monotonic() + timeout_cooldown
+                        set_cooldown(cooldown_key, timeout_cooldown, "timeout")
+                        offset += 1
                         continue
                     except httpx.HTTPError as error:
                         error_text = f"{candidate_model}:key_{key_index + 1}:http_error:{type(error).__name__}:{error}"
                         errors.append(error_text)
                         log_pool_attempt(candidate_model, key_index + 1, 0, False, error_text)
-                        cooldowns[cooldown_key] = time.monotonic() + error_cooldown
+                        set_cooldown(cooldown_key, error_cooldown, "http_error")
+                        offset += 1
                         continue
                     log_pool_attempt(
                         model=candidate_model,
@@ -2255,7 +2559,7 @@ async def call_gemini(
                     )
                     if response.is_success:
                         payload = response.json()
-                        cooldowns.pop(cooldown_key, None)
+                        clear_cooldown(cooldown_key)
                         function_call = function_call_from_gemini(payload)
                         if function_call:
                             log_pool_summary(model, attempted, skipped_cooldown, errors)
@@ -2265,8 +2569,9 @@ async def call_gemini(
                             log_pool_summary(model, attempted, skipped_cooldown, errors)
                             return {"type": "text", "text": text}, payload
                         errors.append(f"{candidate_model}:gemini_content_missing")
+                        offset += 1
                         continue
-                    errors.append(f"{candidate_model}:key_{key_index + 1}:{response.status_code}:{response.text[:500]}")
+                    errors.append(upstream_error_text(candidate_model, key_index + 1, response.status_code, response.text))
                     if response.status_code == 400 and "input token count exceeds" in response.text.lower():
                         log_pool_summary(model, attempted, skipped_cooldown, errors)
                         raise HTTPException(status_code=400, detail={"error": "gemini_input_too_large", "details": errors[-3:]})
@@ -2274,17 +2579,39 @@ async def call_gemini(
                         log_pool_summary(model, attempted, skipped_cooldown, errors)
                         raise HTTPException(status_code=400, detail={"error": "gemini_bad_request", "details": errors[-3:]})
                     if response.status_code == 429:
-                        cooldown = rate_limit_cooldown
-                        if is_large_prompt:
-                            cooldown = max(cooldown, large_prompt_rate_limit_cooldown)
-                        cooldowns[cooldown_key] = time.monotonic() + cooldown
+                        if is_daily_quota_error(response.text):
+                            daily_error = (
+                                f"{candidate_model}:key_{key_index + 1}:429:daily_quota_exhausted:"
+                                f"{safe_upstream_text(response.text)}"
+                            )
+                            daily_quota_errors.append(daily_error)
+                            set_cooldown(cooldown_key, env_int("ZHUDA_DAILY_QUOTA_COOLDOWN_SECONDS", 12 * 60 * 60), "daily_quota")
+                            offset += 1
+                            continue
+                        cooldown = rate_limit_wait_seconds(response.text, rate_limit_cooldown, is_large_prompt)
+                        rate_limit_waited += cooldown
+                        if rate_limit_waited > rate_limit_max_wait_seconds():
+                            errors.append(
+                                f"{candidate_model}:key_{key_index + 1}:429:short_rate_limit_wait_exceeded:"
+                                f"{safe_upstream_text(response.text)}"
+                            )
+                            offset += 1
+                            continue
+                        set_cooldown(cooldown_key, cooldown, "short_rate_limit")
+                        log_pool_attempt(candidate_model, key_index + 1, 0, False, f"short_rate_limit_wait:{cooldown}s")
+                        await sleep_for_short_rate_limit(cooldown)
+                        clear_cooldown(cooldown_key)
+                        candidate_attempts = max(0, candidate_attempts - 1)
                         continue
                     if response.status_code in {500, 502, 503, 504}:
-                        cooldowns[cooldown_key] = time.monotonic() + error_cooldown
+                        set_cooldown(cooldown_key, error_cooldown, "server_error")
                     if response.status_code not in RETRYABLE_UPSTREAM_STATUSES:
                         break
+                    offset += 1
 
     log_pool_summary(model, attempted, skipped_cooldown, errors)
+    if daily_quota_errors:
+        raise HTTPException(status_code=429, detail={"error": "gemini_daily_quota_exhausted", "details": daily_quota_errors[-3:]})
     if attempted == 0 and skipped_cooldown:
         raise HTTPException(
             status_code=503,
@@ -2297,11 +2624,16 @@ async def call_gemini(
     raise HTTPException(status_code=502, detail={"error": "gemini_pool_failed", "details": errors[-3:]})
 
 
-def mimo_system_instruction(declarations: list[dict[str, Any]], image_part_count: int) -> str:
+def openai_compatible_system_instruction(
+    provider_name: str,
+    declarations: list[dict[str, Any]],
+    image_part_count: int,
+    image_switch_hint: str,
+) -> str:
     sections = [EXECUTION_VERIFICATION_PROMPT.strip()]
     sections.append(
         "[Zhuda provider note]\n"
-        "This turn is routed through Xiaomi MiMo using an OpenAI-compatible chat/completions endpoint. "
+        f"This turn is routed through {provider_name} using an OpenAI-compatible chat/completions endpoint. "
         "Answer directly in the user's language."
     )
     if declarations:
@@ -2313,18 +2645,37 @@ def mimo_system_instruction(declarations: list[dict[str, Any]], image_part_count
         tool_list = ", ".join(tool_names)
         sections.append(
             "[Zhuda tool bridge note]\n"
-            "If a declared tool is needed, output exactly one tool call and no prose. The adapter will convert it.\n"
-            "Use this format: <tool_call><function=exec_command><parameter=cmd>pwd</parameter></function></tool_call>\n"
+            "If the API supports native tool_calls, call exactly one declared tool and no prose.\n"
+            "If native tool_calls are unavailable, output exactly this fallback text format and no prose: "
+            "<tool_call><function=exec_command><parameter=cmd>pwd</parameter></function></tool_call>\n"
             "For shell or terminal actions, use function=exec_command and parameter=cmd, not function=shell.\n"
             f"Available tool names: {tool_list}"
         )
     if image_part_count:
         sections.append(
             f"[Zhuda visual bridge note]\n"
-            f"Codex supplied {image_part_count} image(s), but this MiMo route does not send inline images yet. "
-            "If image details are essential, ask the user to switch the same GPT menu model to a Gemini vision-capable mapping."
+            f"Codex supplied {image_part_count} image(s), but this route does not send inline images yet. "
+            f"If image details are essential, ask the user to switch to {image_switch_hint}."
         )
     return "\n\n".join(sections)
+
+
+def mimo_system_instruction(declarations: list[dict[str, Any]], image_part_count: int) -> str:
+    return openai_compatible_system_instruction(
+        "Xiaomi MiMo",
+        declarations,
+        image_part_count,
+        "a Gemini vision-capable mapping",
+    )
+
+
+def deepseek_system_instruction(declarations: list[dict[str, Any]], image_part_count: int) -> str:
+    return openai_compatible_system_instruction(
+        "DeepSeek",
+        declarations,
+        image_part_count,
+        "a vision-capable provider mapping",
+    )
 
 
 def output_text_from_openai_chat(payload: dict[str, Any]) -> str:
@@ -2339,12 +2690,12 @@ def output_text_from_openai_chat(payload: dict[str, Any]) -> str:
     if choice_text:
         return choice_text
     message = first.get("message") if isinstance(first.get("message"), dict) else {}
-    for key in ("content", "reasoning_content", "reasoning", "text", "output_text"):
+    for key in ("content", "text", "output_text"):
         text = collect_openai_text(message.get(key))
         if text:
             return text
     delta = first.get("delta") if isinstance(first.get("delta"), dict) else {}
-    for key in ("content", "reasoning_content", "reasoning", "text", "output_text"):
+    for key in ("content", "text", "output_text"):
         text = collect_openai_text(delta.get(key))
         if text:
             return text
@@ -2359,7 +2710,7 @@ def collect_openai_text(value: Any) -> str:
         return "".join(chunk for chunk in chunks if chunk).strip()
     if isinstance(value, dict):
         chunks = []
-        for key in ("text", "output_text", "content", "reasoning_content", "summary"):
+        for key in ("text", "output_text", "content", "summary"):
             text = collect_openai_text(value.get(key))
             if text:
                 chunks.append(text)
@@ -2507,22 +2858,59 @@ def normalize_text_tool_arguments(name: str, raw_params: dict[str, str]) -> dict
     return arguments
 
 
-async def call_mimo(
+def openai_provider_config(provider_id: str, declarations: list[dict[str, Any]], image_part_count: int) -> dict[str, Any]:
+    if provider_id == "deepseek":
+        return {
+            "providerId": "deepseek",
+            "keys": deepseek_keys(),
+            "missingError": "deepseek_keys_missing",
+            "baseUrl": deepseek_base_url(),
+            "headers": lambda key: {"Authorization": f"Bearer {key}"},
+            "systemInstruction": deepseek_system_instruction(declarations, image_part_count),
+            "enableTools": env_bool("ZHUDA_DEEPSEEK_ENABLE_TOOLS", True),
+            "maxTokens": env_int("ZHUDA_DEEPSEEK_MAX_TOKENS", DEFAULT_DEEPSEEK_MAX_OUTPUT_TOKENS),
+            "badRequestError": "deepseek_bad_request",
+            "dailyQuotaError": "deepseek_daily_quota_exhausted",
+            "cooldownError": "deepseek_cooling_down",
+            "poolError": "deepseek_pool_failed",
+            "contentMissingTag": "deepseek_content_missing",
+        }
+    return {
+        "providerId": "mimo",
+        "keys": mimo_keys(),
+        "missingError": "mimo_keys_missing",
+        "baseUrl": mimo_base_url(),
+        "headers": lambda key: {"Authorization": f"Bearer {key}", "api-key": key},
+        "systemInstruction": mimo_system_instruction(declarations, image_part_count),
+        "enableTools": env_bool("ZHUDA_MIMO_ENABLE_TOOLS", False),
+        "maxTokens": env_int("ZHUDA_MIMO_MAX_TOKENS", DEFAULT_MIMO_MAX_OUTPUT_TOKENS),
+        "badRequestError": "mimo_bad_request",
+        "dailyQuotaError": "mimo_daily_quota_exhausted",
+        "cooldownError": "mimo_cooling_down",
+        "poolError": "mimo_pool_failed",
+        "contentMissingTag": "mimo_content_missing",
+    }
+
+
+async def call_openai_compatible(
     prompt: str,
     model: str,
+    provider_id: str,
     declarations: Optional[list[dict[str, Any]]] = None,
     image_parts: Optional[list[dict[str, Any]]] = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     global cursor, last_upstream_call_at
-    keys = mimo_keys()
+    declarations = declarations or []
+    image_parts = image_parts or []
+    config = openai_provider_config(provider_id, declarations, len(image_parts))
+    keys = config["keys"]
     if not keys:
-        raise HTTPException(status_code=503, detail={"error": "mimo_keys_missing"})
+        raise HTTPException(status_code=503, detail={"error": config["missingError"]})
 
     started = cursor
     cursor = (cursor + 1) % len(keys)
     errors: list[str] = []
-    image_parts = image_parts or []
-    system_instruction = mimo_system_instruction(declarations or [], len(image_parts))
+    system_instruction = config["systemInstruction"]
     prompt_tokens_estimate = estimate_tokens(system_instruction + "\n\n" + prompt)
     large_prompt_threshold = large_prompt_token_threshold()
     is_large_prompt = prompt_tokens_estimate >= large_prompt_threshold
@@ -2543,23 +2931,41 @@ async def call_mimo(
     candidates = upstream_model_candidates(model)[:max(1, max_model_attempts)]
     attempted = 0
     skipped_cooldown = 0
+    daily_quota_errors: list[str] = []
+    rate_limit_waited = 0.0
     upstream_timeout = upstream_timeout_seconds()
-    base_url = mimo_base_url()
-    enable_tools = env_bool("ZHUDA_MIMO_ENABLE_TOOLS", False)
+    base_url = config["baseUrl"]
+    enable_tools = bool(config["enableTools"])
 
     async with upstream_state_lock:
         async with httpx.AsyncClient(timeout=upstream_timeout) as client:
             for candidate_model in candidates:
                 candidate_attempts = 0
-                for offset in range(len(keys)):
+                offset = 0
+                while offset < len(keys):
                     if candidate_attempts >= max_key_attempts:
                         break
                     key_index = (started + offset) % len(keys)
                     cooldown_key = (candidate_model, key_index)
                     now = time.monotonic()
-                    if cooldowns.get(cooldown_key, 0) > now:
-                        skipped_cooldown += 1
-                        continue
+                    cooldown_until = cooldowns.get(cooldown_key, 0)
+                    if cooldown_until > now:
+                        reason = cooldown_reasons.get(cooldown_key, "")
+                        if reason == "daily_quota":
+                            daily_quota_errors.append(f"{candidate_model}:key_{key_index + 1}:429:daily_quota_cooldown")
+                            skipped_cooldown += 1
+                            offset += 1
+                            continue
+                        wait_seconds = int(cooldown_until - now + 0.999)
+                        rate_limit_waited += wait_seconds
+                        if rate_limit_waited > rate_limit_max_wait_seconds():
+                            errors.append(f"{candidate_model}:key_{key_index + 1}:429:short_rate_limit_wait_exceeded")
+                            offset += 1
+                            continue
+                        log_pool_attempt(candidate_model, key_index + 1, 0, False, f"short_rate_limit_wait:{wait_seconds}s")
+                        await sleep_for_short_rate_limit(wait_seconds)
+                        clear_cooldown(cooldown_key)
+                        now = time.monotonic()
                     key = keys[key_index]
                     model_interval = model_min_interval_seconds(candidate_model)
                     model_wait_for = model_interval - (now - last_model_call_at.get(candidate_model, 0))
@@ -2584,7 +2990,7 @@ async def call_mimo(
                         ],
                         "stream": False,
                         "temperature": 0.2,
-                        "max_tokens": env_int("ZHUDA_MIMO_MAX_TOKENS", DEFAULT_MIMO_MAX_OUTPUT_TOKENS),
+                        "max_tokens": config["maxTokens"],
                     }
                     if enable_tools and declarations:
                         body["tools"] = [
@@ -2602,20 +3008,22 @@ async def call_mimo(
                     try:
                         response = await client.post(
                             f"{base_url}/chat/completions",
-                            headers={"Authorization": f"Bearer {key}", "api-key": key},
+                            headers=config["headers"](key),
                             json=body,
                         )
                     except httpx.TimeoutException as error:
                         error_text = f"{candidate_model}:key_{key_index + 1}:timeout_after_{upstream_timeout}s:{error}"
                         errors.append(error_text)
                         log_pool_attempt(candidate_model, key_index + 1, 0, False, error_text)
-                        cooldowns[cooldown_key] = time.monotonic() + timeout_cooldown
+                        set_cooldown(cooldown_key, timeout_cooldown, "timeout")
+                        offset += 1
                         continue
                     except httpx.HTTPError as error:
                         error_text = f"{candidate_model}:key_{key_index + 1}:http_error:{type(error).__name__}:{error}"
                         errors.append(error_text)
                         log_pool_attempt(candidate_model, key_index + 1, 0, False, error_text)
-                        cooldowns[cooldown_key] = time.monotonic() + error_cooldown
+                        set_cooldown(cooldown_key, error_cooldown, "http_error")
+                        offset += 1
                         continue
                     log_pool_attempt(
                         model=candidate_model,
@@ -2626,7 +3034,7 @@ async def call_mimo(
                     )
                     if response.is_success:
                         payload = response.json()
-                        cooldowns.pop(cooldown_key, None)
+                        clear_cooldown(cooldown_key)
                         function_call = function_call_from_openai_chat(payload)
                         if function_call:
                             log_pool_summary(model, attempted, skipped_cooldown, errors)
@@ -2640,34 +3048,75 @@ async def call_mimo(
                             log_pool_summary(model, attempted, skipped_cooldown, errors)
                             return {"type": "text", "text": clean_model_meta_text(text)}, payload
                         shape = json.dumps(openai_chat_payload_shape(payload), ensure_ascii=False, separators=(",", ":"))
-                        errors.append(f"{candidate_model}:mimo_content_missing:{shape[:600]}")
+                        errors.append(f"{candidate_model}:{config['contentMissingTag']}:{shape[:600]}")
+                        offset += 1
                         continue
-                    errors.append(f"{candidate_model}:key_{key_index + 1}:{response.status_code}:{response.text[:500]}")
+                    errors.append(upstream_error_text(candidate_model, key_index + 1, response.status_code, response.text))
                     if response.status_code == 400:
                         log_pool_summary(model, attempted, skipped_cooldown, errors)
-                        raise HTTPException(status_code=400, detail={"error": "mimo_bad_request", "details": errors[-3:]})
+                        raise HTTPException(status_code=400, detail={"error": config["badRequestError"], "details": errors[-3:]})
                     if response.status_code == 429:
-                        cooldown = rate_limit_cooldown
-                        if is_large_prompt:
-                            cooldown = max(cooldown, large_prompt_rate_limit_cooldown)
-                        cooldowns[cooldown_key] = time.monotonic() + cooldown
+                        if is_daily_quota_error(response.text):
+                            daily_error = (
+                                f"{candidate_model}:key_{key_index + 1}:429:daily_quota_exhausted:"
+                                f"{safe_upstream_text(response.text)}"
+                            )
+                            daily_quota_errors.append(daily_error)
+                            set_cooldown(cooldown_key, env_int("ZHUDA_DAILY_QUOTA_COOLDOWN_SECONDS", 12 * 60 * 60), "daily_quota")
+                            offset += 1
+                            continue
+                        cooldown = rate_limit_wait_seconds(response.text, rate_limit_cooldown, is_large_prompt)
+                        rate_limit_waited += cooldown
+                        if rate_limit_waited > rate_limit_max_wait_seconds():
+                            errors.append(
+                                f"{candidate_model}:key_{key_index + 1}:429:short_rate_limit_wait_exceeded:"
+                                f"{safe_upstream_text(response.text)}"
+                            )
+                            offset += 1
+                            continue
+                        set_cooldown(cooldown_key, cooldown, "short_rate_limit")
+                        log_pool_attempt(candidate_model, key_index + 1, 0, False, f"short_rate_limit_wait:{cooldown}s")
+                        await sleep_for_short_rate_limit(cooldown)
+                        clear_cooldown(cooldown_key)
+                        candidate_attempts = max(0, candidate_attempts - 1)
                         continue
                     if response.status_code in {500, 502, 503, 504}:
-                        cooldowns[cooldown_key] = time.monotonic() + max(error_cooldown, timeout_cooldown)
+                        set_cooldown(cooldown_key, max(error_cooldown, timeout_cooldown), "server_error")
                     if response.status_code not in RETRYABLE_UPSTREAM_STATUSES:
                         break
+                    offset += 1
 
     log_pool_summary(model, attempted, skipped_cooldown, errors)
+    if daily_quota_errors:
+        raise HTTPException(status_code=429, detail={"error": config["dailyQuotaError"], "details": daily_quota_errors[-3:]})
     if attempted == 0 and skipped_cooldown:
         raise HTTPException(
             status_code=503,
             detail={
-                "error": "mimo_cooling_down",
+                "error": config["cooldownError"],
                 "cooldownSeconds": cooldown_remaining_seconds(candidates, len(keys)),
                 "details": errors[-3:],
             },
         )
-    raise HTTPException(status_code=502, detail={"error": "mimo_pool_failed", "details": errors[-3:]})
+    raise HTTPException(status_code=502, detail={"error": config["poolError"], "details": errors[-3:]})
+
+
+async def call_mimo(
+    prompt: str,
+    model: str,
+    declarations: Optional[list[dict[str, Any]]] = None,
+    image_parts: Optional[list[dict[str, Any]]] = None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    return await call_openai_compatible(prompt, model, "mimo", declarations, image_parts)
+
+
+async def call_deepseek(
+    prompt: str,
+    model: str,
+    declarations: Optional[list[dict[str, Any]]] = None,
+    image_parts: Optional[list[dict[str, Any]]] = None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    return await call_openai_compatible(prompt, model, "deepseek", declarations, image_parts)
 
 
 async def call_upstream(
@@ -2676,8 +3125,11 @@ async def call_upstream(
     declarations: Optional[list[dict[str, Any]]] = None,
     image_parts: Optional[list[dict[str, Any]]] = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    if current_provider() == "mimo":
+    provider = current_provider()
+    if provider == "mimo":
         return await call_mimo(prompt, model, declarations, image_parts)
+    if provider == "deepseek":
+        return await call_deepseek(prompt, model, declarations, image_parts)
     return await call_gemini(prompt, model, declarations, image_parts)
 
 
@@ -2764,11 +3216,11 @@ def visible_error_text(
     status_summary = ", ".join(status_codes) if status_codes else str(getattr(error, "status_code", "unknown"))
     detail_error = str(detail.get("error", "")) if isinstance(detail, dict) else ""
     timeout_match = re.search(r"timeout_after_(\d+)s", detail_text)
-    if "mimo_content_missing" in detail_text:
+    if "content_missing" in detail_text:
         reason = "empty or unsupported upstream response"
         status_summary = "200 (empty/unsupported content)"
         suggestion = (
-            "MiMo returned HTTP 200 but no parseable message content or tool call. "
+            f"{provider_name} returned HTTP 200 but no parseable message content or tool call. "
             "The adapter now parses more OpenAI-like fields and trims large tool outputs more aggressively; "
             "retry this turn after relaunching the adapter."
         )
@@ -2793,11 +3245,11 @@ def visible_error_text(
             except ValueError:
                 timeout_seconds = None
         timeout_seconds = timeout_seconds or upstream_timeout_seconds()
-        if current_provider() == "mimo":
+        if current_provider() in {"mimo", "deepseek"}:
             suggestion = (
-                f"MiMo 上游超過 {timeout_seconds} 秒沒有完成；這通常不是餘額不足，而是長上下文、工具歷史或上游擁塞。"
+                f"{provider_name} 上游超過 {timeout_seconds} 秒沒有完成；這通常不是餘額不足，而是長上下文、工具歷史或上游擁塞。"
                 "adapter 已正常結束這輪並進入冷卻，避免 Codex 一直卡在「正在思考」。"
-                "如果同一任務連續發生，先 /compact 或切 MiMo v2.5 再試。"
+                "如果同一任務連續發生，先 /compact 或切較輕的模型再試。"
             )
         else:
             suggestion = (
@@ -2813,6 +3265,20 @@ def visible_error_text(
     elif "400" in status_codes:
         reason = "bad upstream request"
         suggestion = "The provider rejected the request format. The adapter logs include the upstream body for debugging."
+    elif detail_error.endswith("_daily_quota_exhausted") or is_daily_quota_error(detail_text):
+        reason = "daily quota exhausted"
+        status_summary = "429"
+        suggestion = (
+            "今天這個上游模型的 API 日額度用完啦，請在 Codex 左下角模型選單切到其他映射模型。"
+            "明天配額重置後，可以再切回來。"
+        )
+    elif "short_rate_limit_wait_exceeded" in detail_text:
+        reason = "minute/token rate limit kept retrying too long"
+        status_summary = "429"
+        suggestion = (
+            "這不是日額度用完，而是 TPM/RPM 短窗口一直沒有恢復。"
+            "正常情況 adapter 會等待並重試；如果等超過上限才會結束這輪，避免無限掛住。"
+        )
     elif "429" in status_codes or "quota" in detail_text.lower():
         reason = "quota/rate limit exhausted or burst-limited"
         large_prompt_threshold = large_prompt_token_threshold()
@@ -2825,11 +3291,17 @@ def visible_error_text(
             )
         else:
             suggestion = "Wait for the cooldown window, then retry. The adapter now limits retries and slows model calls to avoid burning the whole key pool."
-    elif current_provider() == "mimo" and any(code in status_codes for code in ("500", "502", "503", "504")):
-        reason = "MiMo gateway/server error"
+    elif current_provider() in {"mimo", "deepseek"} and any(code in status_codes for code in ("500", "502", "503", "504")):
+        reason = f"{provider_name} gateway/server error"
         suggestion = (
-            "MiMo 上游回了 5xx，這通常和餘額無關，比較像供應商 gateway、模型忙碌或長上下文處理不穩。"
-            "adapter 已把這類錯誤放入較長冷卻；短暫等待、/compact，或切到 MiMo v2.5 通常比立刻連續重試有效。"
+            f"{provider_name} 上游回了 5xx，這通常和餘額無關，比較像供應商 gateway、模型忙碌或長上下文處理不穩。"
+            "adapter 已把這類錯誤放入較長冷卻；短暫等待、/compact，或切到較輕模型通常比立刻連續重試有效。"
+        )
+    elif current_provider() == "gemini" and any(code in status_codes for code in ("500", "502", "503", "504")):
+        reason = "Gemini upstream server/high-demand error"
+        suggestion = (
+            "這通常和 API key 餘額無關，而是 Gemini 上游模型暫時高需求或服務端不穩。"
+            "adapter 會尊重你目前選的模型，不會自動切換；短暫等待後重試，或你手動切到其他模型。"
         )
     else:
         reason = "upstream request failed"
@@ -2839,15 +3311,23 @@ def visible_error_text(
                 "Retry after a short pause; this keeps the request on the forced upstream model."
             )
         else:
-            suggestion = "Retry after a short pause or switch to another model."
+            suggestion = "短暫等待後重試；要換模型請你手動在 Codex 模型選單切換，adapter 不會代你切。"
+    upstream_messages = upstream_error_messages(details)
+    if upstream_messages:
+        upstream_section = "\n\n".join(f"```text\n{message}\n```" for message in upstream_messages)
+    else:
+        upstream_section = "```text\n沒有上游原始錯誤訊息；這是 adapter 本地判斷或本地冷卻狀態。\n```"
     return (
         f"Zhuda {provider_name} adapter could not complete this turn.\n\n"
+        f"上游原始訊息\n{upstream_section}\n\n"
+        f"Zhuda adapter 解釋\n"
         f"- Codex model: {model}\n"
-        f"- First upstream: {upstream_model}\n"
+        f"- Selected upstream: {upstream_model}\n"
         f"- Reason: {reason}\n"
-        f"- Upstream status: {status_summary}\n\n"
-        "The adapter returned this as a normal completed response so Codex does not get stuck in reconnecting. "
-        f"{suggestion}"
+        f"- Upstream status: {status_summary}\n"
+        f"- 模型切換：adapter 不會自動切到其他模型；你選哪個模型，這輪就只打哪個模型。\n"
+        f"- 回傳方式：adapter 把這輪包成正常 completed response，避免 Codex 卡在 reconnecting 或正在思考。\n"
+        f"- 建議：{suggestion}"
     )
 
 
@@ -2881,7 +3361,17 @@ async def stream_response(payload: dict[str, Any], model: str):
         result = {"type": "text", "text": guard_text}
     else:
         try:
-            result, upstream_payload = await call_upstream(prompt, upstream_model, declarations, image_parts)
+            upstream_task = asyncio.create_task(call_upstream(prompt, upstream_model, declarations, image_parts))
+            heartbeat_interval = stream_heartbeat_interval_seconds()
+            while True:
+                done, _ = await asyncio.wait({upstream_task}, timeout=heartbeat_interval)
+                if upstream_task in done:
+                    result, upstream_payload = upstream_task.result()
+                    break
+                heartbeat_response = dict(created_response)
+                heartbeat_response["status"] = "in_progress"
+                heartbeat_response["output"] = []
+                yield sse_event({"type": "response.in_progress", "response": heartbeat_response})
         except Exception as error:
             error_summary = summarize_exception(error)
             result = {
@@ -3111,6 +3601,7 @@ def log_adapter_status() -> dict[str, Any]:
             "model": model,
             "keyIndex": key_index + 1,
             "remainingSeconds": max(0, int(until - now)),
+            "reason": cooldown_reasons.get((model, key_index), ""),
         }
         for (model, key_index), until in cooldowns.items()
         if until > now
@@ -3211,7 +3702,7 @@ async def readiness():
         "provider": provider,
         "keys": len(keys),
         "adapter": f"zhuda-codex-{provider}-adapter",
-        "models": list(model_aliases().keys()),
+        "models": visible_model_ids(),
         "forceUpstreamModel": forced_upstream_model(),
         "nextKeyIndex": (cursor % max(len(keys), 1)) + 1,
     }
@@ -3227,6 +3718,7 @@ async def pool_status():
             "model": model,
             "keyIndex": key_index + 1,
             "remainingSeconds": max(0, int(until - now)),
+            "reason": cooldown_reasons.get((model, key_index), ""),
         }
         for (model, key_index), until in cooldowns.items()
         if until > now
@@ -3241,6 +3733,7 @@ async def pool_status():
             for index, key in enumerate(keys)
         ],
         "models": model_aliases(),
+        "visibleModels": visible_model_ids(),
         "forceUpstreamModel": forced_upstream_model(),
         "runtime": {
             "maxInputTokens": max_input_tokens_limit(),
@@ -3283,7 +3776,7 @@ async def models(authorization: Optional[str] = Header(default=None)):
                 "object": "model",
                 "owned_by": f"zhuda-codex-{current_provider()}-adapter",
             }
-            for public_id in model_aliases().keys()
+            for public_id in visible_model_ids()
         ],
     }
 

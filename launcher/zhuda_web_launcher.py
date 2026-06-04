@@ -91,6 +91,34 @@ def upstream_by_id(provider, model_id):
     return models[0].get("upstream") if models else ""
 
 
+def unique_values(values):
+    out = []
+    seen = set()
+    for value in values:
+        value = str(value or "").strip()
+        if value and value not in seen:
+            out.append(value)
+            seen.add(value)
+    return out
+
+
+def provider_visible_models(provider):
+    return unique_values(model.get("upstream") or model.get("id") for model in upstream_models(provider))
+
+
+def default_model_id(provider):
+    return provider.get("default_model") or (upstream_models(provider)[0].get("id") if upstream_models(provider) else "")
+
+
+def selected_upstream_model(provider, model_id=None):
+    selected = model_id or default_model_id(provider)
+    upstream = upstream_by_id(provider, selected)
+    if upstream:
+        return upstream
+    visible = provider_visible_models(provider)
+    return visible[0] if visible else ""
+
+
 def build_aliases(manifest, provider, mapping_ids):
     codex_ids = [item["id"] for item in manifest.get("codex_models", [])]
     aliases = {}
@@ -104,20 +132,33 @@ def build_aliases(manifest, provider, mapping_ids):
     return {key: value for key, value in aliases.items() if key and value}
 
 
-def build_session_env_vars(manifest, provider, mapping_ids, api_key, endpoint_id=None):
+def build_session_env_vars(manifest, provider, mapping_ids, api_key, endpoint_id=None, model_id=None):
     aliases = build_aliases(manifest, provider, mapping_ids)
-    first_codex = "zhuda-codex" if "zhuda-codex" in aliases else next(iter(aliases), "")
-    key_name = "MIMO_API_KEY_1" if provider["id"] == "mimo" else "GEMINI_API_KEY_1"
+    selected_upstream = selected_upstream_model(provider, model_id)
+    visible_models = provider_visible_models(provider)
+    for model in visible_models:
+        aliases.setdefault(model, model)
+    if selected_upstream:
+        aliases.setdefault("zhuda-codex", selected_upstream)
+        aliases.setdefault("gemini-codex", selected_upstream)
+    first_codex = selected_upstream or ("zhuda-codex" if "zhuda-codex" in aliases else next(iter(aliases), ""))
+    key_name_by_provider = {
+        "mimo": "MIMO_API_KEY_1",
+        "deepseek": "DEEPSEEK_API_KEY_1",
+    }
+    key_name = key_name_by_provider.get(provider["id"], "GEMINI_API_KEY_1")
     values = {
         "ZHUDA_PROVIDER": provider["id"],
         "ZHUDA_PROVIDER_ENDPOINT": endpoint_id or "",
         "ZHUDA_SELECTED_CODEX_MODEL": first_codex,
-        "ZHUDA_SELECTED_UPSTREAM_MODEL": aliases.get(first_codex, ""),
+        "ZHUDA_SELECTED_UPSTREAM_MODEL": selected_upstream or aliases.get(first_codex, ""),
+        "ZHUDA_VISIBLE_MODELS": ",".join(visible_models),
         key_name: api_key,
         "ZHUDA_MODEL_MAPPINGS": ",".join(f"{key}={value}" for key, value in aliases.items()),
         "ZHUDA_FORCE_UPSTREAM_MODEL": "0",
         "ZHUDA_GEMINI_FALLBACK_MODELS": "0",
         "ZHUDA_MIMO_FALLBACK_MODELS": "0",
+        "ZHUDA_DEEPSEEK_FALLBACK_MODELS": "0",
         "ZHUDA_MAX_KEY_ATTEMPTS": "1",
         "ZHUDA_MAX_MODEL_ATTEMPTS": "1",
         "ZHUDA_UPSTREAM_TIMEOUT_SECONDS": "60",
@@ -127,12 +168,14 @@ def build_session_env_vars(manifest, provider, mapping_ids, api_key, endpoint_id
     }
     if provider["id"] == "gemini":
         values["ZHUDA_GEMINI_MODELS"] = ",".join(f"{key}={value}" for key, value in aliases.items())
+        values["ZHUDA_GEMINI_VISIBLE_MODELS"] = ",".join(visible_models)
         values["ZHUDA_GEMINI_API_KEY"] = api_key
         values["GEMINI_API_KEY"] = api_key
     if provider["id"] == "mimo":
         base_url = provider_base_url(provider, endpoint_id) or "https://api.xiaomimimo.com/v1"
         values["MIMO_API_KEY"] = api_key
         values["XIAOMI_MIMO_API_KEY"] = api_key
+        values["ZHUDA_MIMO_VISIBLE_MODELS"] = ",".join(visible_models)
         values["MIMO_BASE_URL"] = base_url
         values["XIAOMI_MIMO_BASE_URL"] = base_url
         values["ZHUDA_MAX_INPUT_TOKENS"] = "12000"
@@ -147,6 +190,20 @@ def build_session_env_vars(manifest, provider, mapping_ids, api_key, endpoint_id
         values["ZHUDA_LARGE_PROMPT_MIN_INTERVAL_MS"] = "25000"
         values["ZHUDA_LARGE_PROMPT_RATE_LIMIT_COOLDOWN_SECONDS"] = "180"
         values["ZHUDA_MODEL_MIN_INTERVALS_MS"] = "mimo-v2.5-pro:12000,mimo-v2.5:8000"
+    if provider["id"] == "deepseek":
+        base_url = provider_base_url(provider, endpoint_id) or "https://api.deepseek.com"
+        values["DEEPSEEK_API_KEY"] = api_key
+        values["ZHUDA_DEEPSEEK_API_KEY"] = api_key
+        values["ZHUDA_DEEPSEEK_VISIBLE_MODELS"] = ",".join(visible_models)
+        values["ZHUDA_DEEPSEEK_MODELS"] = ",".join(f"{key}={value}" for key, value in aliases.items())
+        values["DEEPSEEK_BASE_URL"] = base_url
+        values["ZHUDA_DEEPSEEK_BASE_URL"] = base_url
+        values["ZHUDA_DEEPSEEK_ENABLE_TOOLS"] = "1"
+        values["ZHUDA_DEEPSEEK_MAX_TOKENS"] = "4096"
+        values["ZHUDA_UPSTREAM_TIMEOUT_SECONDS"] = "120"
+        values["ZHUDA_TIMEOUT_COOLDOWN_SECONDS"] = "120"
+        values["ZHUDA_ERROR_COOLDOWN_SECONDS"] = "45"
+        values["ZHUDA_MODEL_MIN_INTERVALS_MS"] = "deepseek-v4-pro:8000,deepseek-v4-flash:4000"
     return values
 
 
@@ -197,7 +254,7 @@ class LauncherState:
                     "ok": True,
                     "provider": pool.get("provider"),
                     "timeoutSeconds": runtime.get("upstreamTimeoutSeconds"),
-                    "modelCount": len(pool.get("models") or {}),
+                    "modelCount": len(pool.get("visibleModels") or pool.get("models") or {}),
                     "keyCount": pool.get("keyCount"),
                 })
         return {
@@ -212,7 +269,7 @@ class LauncherState:
         if self.mac_app_exe.exists():
             subprocess.run([str(self.mac_app_exe), "--zhuda-stop-adapter"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-    def launch_mac(self, manifest, provider, mapping_ids, api_key, endpoint_id=None):
+    def launch_mac(self, manifest, provider, mapping_ids, api_key, endpoint_id=None, model_id=None):
         if not self.mac_app_exe.exists():
             raise RuntimeError(f"missing Mac app executable: {self.mac_app_exe}")
         self.stop_mac()
@@ -221,14 +278,15 @@ class LauncherState:
         except FileNotFoundError:
             pass
         env = os.environ.copy()
-        env.update(build_session_env_vars(manifest, provider, mapping_ids, api_key, endpoint_id))
+        env.update(build_session_env_vars(manifest, provider, mapping_ids, api_key, endpoint_id, model_id))
         subprocess.Popen([str(self.mac_app_exe)], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
-        aliases = build_aliases(manifest, provider, mapping_ids)
+        visible = provider_visible_models(provider)
+        selected = selected_upstream_model(provider, model_id)
         endpoint_label = provider_endpoint_label(provider, endpoint_id)
         endpoint_part = f" / {endpoint_label}" if endpoint_label else ""
-        self.last_launch = f"{provider['name']}{endpoint_part} / {len(aliases)} mappings @ {time.strftime('%H:%M:%S')}"
+        self.last_launch = f"{provider['name']}{endpoint_part} / {selected} / {len(visible)} models @ {time.strftime('%H:%M:%S')}"
 
-    def launch_win(self, manifest, provider, mapping_ids, api_key, endpoint_id=None):
+    def launch_win(self, manifest, provider, mapping_ids, api_key, endpoint_id=None, model_id=None):
         if not self.win_launch_script.exists():
             raise RuntimeError(f"missing Windows launch script: {self.win_launch_script}")
         powershell = shutil.which("powershell.exe") or shutil.which("powershell") or shutil.which("pwsh")
@@ -238,6 +296,8 @@ class LauncherState:
         env["ZHUDA_WEB_LAUNCH_API_KEY"] = api_key
         env["ZHUDA_WEB_LAUNCH_MAPPINGS"] = json.dumps(mapping_ids or {}, ensure_ascii=False, separators=(",", ":"))
         env["ZHUDA_WEB_LAUNCH_ENDPOINT_ID"] = endpoint_id or ""
+        env["ZHUDA_WEB_LAUNCH_MODEL_ID"] = model_id or default_model_id(provider)
+        env["ZHUDA_WEB_LAUNCH_VISIBLE_MODELS"] = ",".join(provider_visible_models(provider))
         base_url = provider_base_url(provider, endpoint_id)
         if base_url:
             env["ZHUDA_WEB_LAUNCH_BASE_URL"] = base_url
@@ -252,10 +312,11 @@ class LauncherState:
             "-Provider",
             provider["id"],
         ], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        aliases = build_aliases(manifest, provider, mapping_ids)
+        visible = provider_visible_models(provider)
+        selected = selected_upstream_model(provider, model_id)
         endpoint_label = provider_endpoint_label(provider, endpoint_id)
         endpoint_part = f" / {endpoint_label}" if endpoint_label else ""
-        self.last_launch = f"{provider['name']}{endpoint_part} / {len(aliases)} mappings @ {time.strftime('%H:%M:%S')}"
+        self.last_launch = f"{provider['name']}{endpoint_part} / {selected} / {len(visible)} models @ {time.strftime('%H:%M:%S')}"
 
     def launch(self, payload):
         manifest = self.manifest()
@@ -268,18 +329,23 @@ class LauncherState:
         if not api_key:
             raise RuntimeError("API key is empty.")
         endpoint_id = (payload.get("endpoint_id") or "").strip()
+        model_id = (payload.get("model_id") or "").strip()
         mapping_ids = payload.get("mappings") or {}
         aliases = build_aliases(manifest, provider, mapping_ids)
-        if not aliases:
-            raise RuntimeError("No model mappings were selected.")
+        selected = selected_upstream_model(provider, model_id)
+        visible = provider_visible_models(provider)
+        if not visible:
+            raise RuntimeError("No provider models were selected.")
         if self.platform_name == "win":
-            self.launch_win(manifest, provider, mapping_ids, api_key, endpoint_id)
+            self.launch_win(manifest, provider, mapping_ids, api_key, endpoint_id, model_id)
         else:
-            self.launch_mac(manifest, provider, mapping_ids, api_key, endpoint_id)
+            self.launch_mac(manifest, provider, mapping_ids, api_key, endpoint_id, model_id)
         return {
             "ok": True,
-            "message": f"已啟動 {provider['name']}，{len(aliases)} 個 Codex 模型映射已注入。",
+            "message": f"已启动 {provider['name']}，默认 {selected}，{len(visible)} 个真实模型可供 Codex 使用。",
             "mappings": aliases,
+            "selectedModel": selected,
+            "visibleModels": visible,
             "endpoint": provider_endpoint_label(provider, endpoint_id),
         }
 

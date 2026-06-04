@@ -110,7 +110,9 @@ function Get-UpstreamModels {
 
 function Resolve-CodexModelSlug {
     param($ModelObject)
-    return [string]$ModelObject.codex_slug
+    $slug = [string](Get-JsonProperty $ModelObject "codex_slug" "")
+    if ($slug) { return $slug }
+    return [string](Get-JsonProperty $ModelObject "upstream" "")
 }
 
 function Get-RuntimeContext {
@@ -192,10 +194,20 @@ function Start-ZhudaCodexMappings {
     if ($NoLaunch) { return }
     $sessionKey = ""
     if ($Secret) { $sessionKey = $Secret.Trim() }
-    $mappingJson = (Convert-MappingsObjectToHashtable $Mappings) | ConvertTo-Json -Depth 20 -Compress
+    $mappingTable = Convert-MappingsObjectToHashtable $Mappings
+    $mappingJson = $mappingTable | ConvertTo-Json -Depth 20 -Compress
+    $selectedUpstream = ""
+    if ($mappingTable.Contains("zhuda-codex")) { $selectedUpstream = [string]$mappingTable["zhuda-codex"] }
+    if (-not $selectedUpstream -and $env:ZHUDA_WEB_LAUNCH_MODEL_ID) { $selectedUpstream = [string]$env:ZHUDA_WEB_LAUNCH_MODEL_ID }
+    if (-not $selectedUpstream -and $mappingTable.Count -gt 0) { $selectedUpstream = [string](@($mappingTable.Values)[0]) }
+    if (-not $selectedUpstream) { $selectedUpstream = "zhuda-codex" }
+    $visibleModels = [string]$env:ZHUDA_WEB_LAUNCH_VISIBLE_MODELS
     $launchEnv = @{
         ZHUDA_PROVIDER = [string]$ProviderObject.id
         ZHUDA_MODEL_MAPPINGS = $mappingJson
+        ZHUDA_SELECTED_CODEX_MODEL = $selectedUpstream
+        ZHUDA_SELECTED_UPSTREAM_MODEL = $selectedUpstream
+        ZHUDA_VISIBLE_MODELS = $visibleModels
         ZHUDA_FORCE_UPSTREAM_MODEL = "0"
         ZHUDA_CODEX_LAUNCHER_SESSION = [DateTime]::UtcNow.ToString("o")
     }
@@ -203,6 +215,7 @@ function Start-ZhudaCodexMappings {
         $launchEnv["MIMO_API_KEY_1"] = $sessionKey
         $launchEnv["MIMO_API_KEY"] = $sessionKey
         $launchEnv["XIAOMI_MIMO_API_KEY"] = $sessionKey
+        $launchEnv["ZHUDA_MIMO_VISIBLE_MODELS"] = $visibleModels
         $launchEnv["ZHUDA_MAX_INPUT_TOKENS"] = "12000"
         $launchEnv["ZHUDA_MAX_PINNED_TOKENS"] = "3500"
         $launchEnv["ZHUDA_MAX_HISTORY_ITEM_TOKENS"] = "1200"
@@ -224,16 +237,36 @@ function Start-ZhudaCodexMappings {
         if ($env:ZHUDA_WEB_LAUNCH_ENDPOINT_ID) {
             $launchEnv["ZHUDA_PROVIDER_ENDPOINT"] = [string]$env:ZHUDA_WEB_LAUNCH_ENDPOINT_ID
         }
+    } elseif ($ProviderObject.id -eq "deepseek") {
+        $launchEnv["DEEPSEEK_API_KEY_1"] = $sessionKey
+        $launchEnv["DEEPSEEK_API_KEY"] = $sessionKey
+        $launchEnv["ZHUDA_DEEPSEEK_API_KEY"] = $sessionKey
+        $launchEnv["ZHUDA_DEEPSEEK_VISIBLE_MODELS"] = $visibleModels
+        $launchEnv["ZHUDA_DEEPSEEK_MODELS"] = $mappingJson
+        $launchEnv["ZHUDA_DEEPSEEK_FALLBACK_MODELS"] = "0"
+        $launchEnv["ZHUDA_DEEPSEEK_ENABLE_TOOLS"] = "1"
+        $launchEnv["ZHUDA_DEEPSEEK_MAX_TOKENS"] = "4096"
+        $launchEnv["ZHUDA_UPSTREAM_TIMEOUT_SECONDS"] = "120"
+        $launchEnv["ZHUDA_TIMEOUT_COOLDOWN_SECONDS"] = "120"
+        $launchEnv["ZHUDA_ERROR_COOLDOWN_SECONDS"] = "45"
+        $launchEnv["ZHUDA_MODEL_MIN_INTERVALS_MS"] = "deepseek-v4-pro:8000,deepseek-v4-flash:4000"
+        $baseUrl = [string]$env:ZHUDA_WEB_LAUNCH_BASE_URL
+        if (-not $baseUrl) { $baseUrl = Get-JsonProperty $ProviderObject "base_url" "" }
+        if ($baseUrl) {
+            $launchEnv["DEEPSEEK_BASE_URL"] = [string]$baseUrl
+            $launchEnv["ZHUDA_DEEPSEEK_BASE_URL"] = [string]$baseUrl
+        }
     } else {
         $launchEnv["ZHUDA_GEMINI_API_KEY"] = $sessionKey
         $launchEnv["GEMINI_API_KEY_1"] = $sessionKey
         $launchEnv["GEMINI_API_KEY"] = $sessionKey
+        $launchEnv["ZHUDA_GEMINI_VISIBLE_MODELS"] = $visibleModels
     }
     if ($Context.portable) {
         if (-not (Test-Path $Context.starter)) { throw "Portable starter not found: $($Context.starter)" }
         Start-ProcessWithEnvironment -FilePath "powershell.exe" -ArgumentList @(
             "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $Context.starter,
-            "-Model", "zhuda-codex"
+            "-Model", $selectedUpstream
         ) -Environment $launchEnv
         return
     }
@@ -241,7 +274,7 @@ function Start-ZhudaCodexMappings {
     $adapter = Find-DesktopAdapter
     Start-ProcessWithEnvironment -FilePath "powershell.exe" -ArgumentList @(
         "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $adapter,
-        "-Local", "-Model", "zhuda-codex"
+        "-Local", "-Model", $selectedUpstream
     ) -Environment $launchEnv
 }
 
@@ -326,8 +359,9 @@ function Get-MappingPreview {
     $lines.Add("Provider: $($ProviderObject.name)") | Out-Null
     $lines.Add("Default: zhuda-codex -> $($ModelObject.upstream)") | Out-Null
     $lines.Add("") | Out-Null
-    foreach ($item in @($ProviderObject.models)) {
-        $lines.Add("$($item.codex_slug) -> $($item.upstream)") | Out-Null
+    foreach ($item in (Get-UpstreamModels $ProviderObject)) {
+        $label = if ($item.label) { [string]$item.label } else { [string]$item.id }
+        $lines.Add("$label -> $($item.upstream)") | Out-Null
     }
     return ($lines.ToArray() -join "`r`n")
 }
@@ -352,8 +386,9 @@ function Resolve-AssetPath {
 
 function Apply-And-Launch {
     param($ProviderObject, $ModelObject, [string]$Secret)
-    $ctx = Save-SelectedRuntime $ProviderObject $ModelObject $Secret
-    Start-ZhudaCodex $ctx $ModelObject $Secret
+    $upstream = if ($ModelObject.upstream) { [string]$ModelObject.upstream } else { [string]$ModelObject.id }
+    $ctx = Save-SelectedRuntimeMappings $ProviderObject @{ "zhuda-codex" = $upstream } $Secret
+    Start-ZhudaCodexMappings $ctx $ProviderObject @{ "zhuda-codex" = $upstream } $Secret
     return $ctx
 }
 
@@ -554,11 +589,14 @@ function Refresh-Models {
     $modelCombo.Items.Clear()
     $p = $script:ProviderByDisplay[[string]$providerCombo.SelectedItem]
     if (-not $p) { return }
-    foreach ($m in @($p.models)) {
-        $display = "$($m.label) [$($m.id)] -> $($m.codex_slug) => $($m.upstream)"
+    $defaultModel = Get-JsonProperty $p "default_model" ""
+    foreach ($m in (Get-UpstreamModels $p)) {
+        $display = "$($m.label) [$($m.id)] => $($m.upstream)"
         $script:ModelByDisplay[$display] = $m
         [void]$modelCombo.Items.Add($display)
-        if ([bool](Get-JsonProperty $m "default" $false)) { $modelCombo.SelectedItem = $display }
+        if ([bool](Get-JsonProperty $m "default" $false) -or ($defaultModel -and $m.id -eq $defaultModel)) {
+            $modelCombo.SelectedItem = $display
+        }
     }
     if ($modelCombo.SelectedIndex -lt 0 -and $modelCombo.Items.Count -gt 0) { $modelCombo.SelectedIndex = 0 }
     $launchButton.Enabled = [bool](Get-JsonProperty $p "enabled" $false)
@@ -597,7 +635,7 @@ $launchButton.Add_Click({
         if (-not $p -or -not $m) { throw "Select a provider and model." }
         $ctx = Apply-And-Launch $p $m $keyBox.Text
         [Windows.Forms.MessageBox]::Show(
-            "Injected $($p.name): $($m.codex_slug) -> $($m.upstream)`r`nAPI key was not saved locally.`r`nRuntime: $($ctx.runtime)",
+            "Injected $($p.name): zhuda-codex -> $($m.upstream)`r`nAPI key was not saved locally.`r`nRuntime: $($ctx.runtime)",
             "Zhuda-Codex Launcher",
             [Windows.Forms.MessageBoxButtons]::OK,
             [Windows.Forms.MessageBoxIcon]::Information

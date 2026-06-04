@@ -136,6 +136,9 @@ function Resolve-CodexModelSlug {
     param([string]$Name)
     if ($null -eq $Name) { $Name = "" }
     $key = $Name.Trim().ToLowerInvariant()
+    if ($key.StartsWith("gemini-") -or $key.StartsWith("gemma-") -or $key.StartsWith("mimo-") -or $key.StartsWith("models/")) {
+        return $Name.Trim()
+    }
     switch ($key) {
         "gemma-31b" { return "gpt-5.5" }
         "31b" { return "gpt-5.5" }
@@ -315,6 +318,14 @@ function Main {
         if ($receiver) {
             try { Download-File "$receiver/download/$name" $local } catch {}
         }
+        if (-not (Test-Path $local)) {
+            $candidate = Join-Path (Split-Path -Parent $PSCommandPath) $name
+            if (Test-Path $candidate) { $local = $candidate }
+        }
+        if (-not (Test-Path $local) -and $name -eq "windows_zhuda_local_adapter.ps1") {
+            $legacy = Join-Path (Split-Path -Parent $PSCommandPath) "legacy\windows_zhuda_codex_switch.ps1"
+            if (Test-Path $legacy) { $local = $legacy }
+        }
         if (-not (Test-Path $local)) { throw "missing tool script: $local" }
         Copy-Item $local (Join-Path $tmpRoot "tools\$name") -Force
     }
@@ -330,6 +341,22 @@ function Main {
         }
         if (-not (Test-Path $local)) { throw "missing portable launcher asset: $name" }
         Copy-Item $local (Join-Path $tmpRoot $name) -Force
+    }
+
+    $launcherTmp = Join-Path $tmpRoot "launcher"
+    Ensure-Dir $launcherTmp
+    $sourceRoot = Split-Path -Parent (Split-Path -Parent $PSCommandPath)
+    $sharedLauncher = Join-Path $sourceRoot "launcher\zhuda_web_launcher.ps1"
+    if (Test-Path $sharedLauncher) {
+        Copy-Item $sharedLauncher (Join-Path $launcherTmp "zhuda_web_launcher.ps1") -Force
+    } else {
+        throw "missing shared web launcher: $sharedLauncher"
+    }
+    $sharedWeb = Join-Path $sourceRoot "launcher\web"
+    if (Test-Path $sharedWeb) {
+        Copy-Tree $sharedWeb (Join-Path $launcherTmp "web")
+    } else {
+        throw "missing shared web assets: $sharedWeb"
     }
 
     $brandTmp = Join-Path $tmpRoot "assets\brand"

@@ -1,20 +1,22 @@
 # Zhuda-Codex macOS
 
-macOS files for the Zhuda-Codex local adapter, launcher, persistent LaunchAgent, and LAN log/control receiver.
+这里放 macOS 版本的本地 adapter、Web 启动器、独立 App 包装脚本、模型菜单注入脚本，以及局域网日志/控制接收器。
 
-## Local Launcher
+## 本地启动
 
-From the repository root:
+从仓库根目录执行：
 
 ```bash
 ./mac/Zhuda-Codex-Launcher.command
 ```
 
-The launcher opens a local Web UI, asks for a provider API key, applies the selected Codex-to-upstream model mapping, and launches Codex. API keys entered through the launcher are injected through the launch environment and are not written into the source tree.
+启动器会打开本地 Web 页面。选择供应商、选择默认真实模型、输入本次会话 API key，然后启动 Codex。API key 只通过进程环境变量注入，不会写进源码目录。
+
+如果 `mac/dist/Zhuda-Codex.app` 已经存在，launcher 会使用这个独立 App 包。它不会覆盖系统里的官方 Codex，也不会把 provider 配置写进官方 Codex 全局配置。
 
 ## Adapter
 
-Development setup:
+开发环境：
 
 ```bash
 cd /path/to/ZhudaCodex/mac
@@ -22,30 +24,29 @@ cd /path/to/ZhudaCodex/mac
 ./scripts/start_adapter.sh
 ```
 
-Smoke test:
+快速测试：
 
 ```bash
 ./scripts/test_responses.sh
 ```
 
-Persistent LaunchAgent:
+LaunchAgent：
 
 ```bash
 ./scripts/install_launch_agent.sh
 ./scripts/uninstall_launch_agent.sh
 ```
 
-The LaunchAgent runtime lives at:
+运行时目录：
 
 ```text
 ~/.zhuda-codex/
+~/Library/Application Support/Zhuda-Codex/
 ```
 
-That directory can contain runtime logs and optional local `.env` state. It is not source and must not be committed.
+这些目录是本机状态，可能包含日志和临时配置，不要提交到 GitHub。
 
-## Codex Config
-
-Example provider config:
+## Codex 配置示例
 
 ```toml
 model = "zhuda-codex"
@@ -61,34 +62,56 @@ wire_api = "responses"
 experimental_bearer_token = "zhuda-codex-local-token"
 ```
 
-The provider name is historical; the adapter can route more than Gemini depending on `providers.json` and the launcher-selected environment.
+provider 名称里保留 `gemini_pool` 是历史遗留；现在 adapter 可以根据启动器选择路由到 Gemini、MiMo、DeepSeek 等供应商。
 
-## LAN Receiver
+## 模型菜单注入
 
-Start the macOS receiver:
+有些 Codex Desktop 版本会忽略 adapter 暴露的 `/v1/models`，继续显示内置 GPT 名称。macOS 独立 App 会在启动时打开一个仅限 localhost 的临时 DevTools 端口，并运行：
+
+```text
+mac/scripts/zhuda_model_injector.py
+```
+
+它只修改当前渲染器会话里的模型菜单，不改官方 Codex 安装包。
+
+可选环境变量：
+
+```text
+ZHUDA_CODEX_CDP_PORT=9233
+ZHUDA_MODEL_INJECT_DURATION_SECONDS=75
+```
+
+日志位置：
+
+```text
+~/Library/Application Support/Zhuda-Codex/logs/model-injector-*.out.log
+~/Library/Application Support/Zhuda-Codex/logs/model-injector-*.err.log
+```
+
+## 局域网日志接收器
+
+启动：
 
 ```bash
 ./scripts/start_mac_lan_log_receiver.sh
 ```
 
-Open:
+打开：
 
 ```text
 http://YOUR_MAC_IP:4100/logs
 http://YOUR_MAC_IP:4100/control
 ```
 
-Windows onboarding command template:
+Windows 接入命令模板：
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -Command "iwr 'http://YOUR_MAC_IP:4100/download/windows_zhuda_connect.ps1' -OutFile \"$env:TEMP\zhuda_connect.ps1\"; powershell -NoProfile -ExecutionPolicy Bypass -File \"$env:TEMP\zhuda_connect.ps1\" -Mode local -Model gemma-31b"
 ```
 
-The receiver redacts common API-key patterns before writing forwarded logs. Receiver runtime data is stored outside the repository under the user's home directory.
+接收器会对常见 API key 形态做脱敏后再写日志。
 
-## Open Source Checklist
-
-Before publishing this folder, exclude:
+## 开源前不要提交
 
 ```text
 .env
@@ -100,4 +123,4 @@ archive/runtime_logs/
 .DS_Store
 ```
 
-The repository `.gitignore` already covers these paths.
+仓库 `.gitignore` 已覆盖这些路径。

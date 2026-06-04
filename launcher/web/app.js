@@ -1,7 +1,7 @@
 const state = {
   manifest: null,
   selectedProviderId: null,
-  mappings: {},
+  selectedModels: {},
   endpoints: {},
   launching: false,
   statusTimer: null,
@@ -38,10 +38,6 @@ function providers() {
   return state.manifest?.providers || [];
 }
 
-function codexModels() {
-  return state.manifest?.codex_models || [];
-}
-
 function selectedProvider() {
   return providers().find((p) => p.id === state.selectedProviderId) || providers()[0];
 }
@@ -67,30 +63,32 @@ function selectedEndpointOption(provider) {
   return providerEndpoints(provider).find((item) => item.id === selected) || providerEndpoints(provider)[0] || null;
 }
 
-function defaultsFor(provider) {
-  const defaults = provider?.default_mappings || {};
+function defaultModelFor(provider) {
   const models = providerModels(provider);
-  const first = models[0]?.id || "";
-  const result = {};
-  for (const codex of codexModels()) {
-    result[codex.id] = defaults[codex.id] || first;
-  }
-  return result;
+  return provider?.default_model || models.find((model) => model.default)?.id || models[0]?.id || "";
 }
 
-function ensureProviderState(provider) {
-  if (!provider) return;
-  if (!state.mappings[provider.id]) {
-    state.mappings[provider.id] = defaultsFor(provider);
-  }
-  if (!state.endpoints[provider.id] && providerEndpoints(provider).length) {
-    state.endpoints[provider.id] = defaultEndpointFor(provider);
-  }
+function selectedModelFor(provider) {
+  return state.selectedModels[provider.id] || defaultModelFor(provider);
 }
 
 function upstreamByModelId(provider, modelId) {
   const model = providerModels(provider).find((item) => item.id === modelId || item.upstream === modelId);
   return model?.upstream || modelId || "";
+}
+
+function modelLabel(model) {
+  return `${model.label || model.id} (${model.upstream || model.id})`;
+}
+
+function ensureProviderState(provider) {
+  if (!provider) return;
+  if (!state.selectedModels[provider.id]) {
+    state.selectedModels[provider.id] = defaultModelFor(provider);
+  }
+  if (!state.endpoints[provider.id] && providerEndpoints(provider).length) {
+    state.endpoints[provider.id] = defaultEndpointFor(provider);
+  }
 }
 
 function renderProviderCard(provider) {
@@ -99,15 +97,15 @@ function renderProviderCard(provider) {
   const disabled = !provider.enabled;
   const card = document.createElement("section");
   card.className = `provider-card ${active ? "active" : ""} ${disabled ? "disabled" : ""}`;
+  const selectedModel = providerModels(provider).find((item) => item.id === selectedModelFor(provider));
   card.innerHTML = `
     <button class="provider-head" type="button">
       <span>
         <strong>${escapeHtml(provider.name)}</strong>
-        <small>${provider.enabled ? `${providerModels(provider).length} 個模型` : "不可用"}</small>
+        <small>${provider.enabled ? `${providerModels(provider).length} 个模型 · ${escapeHtml(selectedModel?.label || selectedModelFor(provider))}` : "不可用"}</small>
       </span>
-      <span class="provider-badge">${provider.enabled ? (active ? "已選" : "選擇") : "停用"}</span>
+      <span class="provider-badge">${provider.enabled ? (active ? "已选" : "选择") : "停用"}</span>
     </button>
-    <div class="provider-body"></div>
   `;
   card.querySelector(".provider-head").addEventListener("click", () => {
     if (disabled) return;
@@ -115,17 +113,49 @@ function renderProviderCard(provider) {
     ensureProviderState(provider);
     renderProviders();
   });
-  const body = card.querySelector(".provider-body");
-  if (active && provider.enabled) {
-    const endpointRow = renderEndpointRow(provider);
-    if (endpointRow) body.appendChild(endpointRow);
-    body.appendChild(renderMappingTable(provider));
-    body.appendChild(renderKeyRow(provider));
-    body.appendChild(renderActions(provider));
-  } else if (active && !provider.enabled) {
-    body.innerHTML = `<p class="provider-note">${escapeHtml(provider.note || "Reserved for later.")}</p>`;
-  }
   return card;
+}
+
+function providerDescription(provider) {
+  if (!provider.enabled) return provider.note || "Reserved for later.";
+  const endpoint = selectedEndpointOption(provider);
+  const model = providerModels(provider).find((item) => item.id === selectedModelFor(provider));
+  const parts = [
+    `${providerModels(provider).length} 个上游模型可注入本次 Codex 会话。`,
+  ];
+  if (endpoint?.label) parts.push(`接口：${endpoint.label}`);
+  if (model) parts.push(`默认：${model.label} / ${model.upstream || model.id}`);
+  return parts.join(" ");
+}
+
+function renderProviderDetail() {
+  const provider = selectedProvider();
+  const box = $("providerDetail");
+  box.innerHTML = "";
+  if (!provider) return;
+  ensureProviderState(provider);
+
+  const card = document.createElement("section");
+  card.className = `detail-card ${provider.enabled ? "" : "disabled"}`;
+  card.innerHTML = `
+    <div class="detail-head">
+      <div>
+        <p class="eyebrow">Selected provider</p>
+        <h3>${escapeHtml(provider.name)}</h3>
+      </div>
+      <span class="provider-badge">${provider.enabled ? "可用" : "停用"}</span>
+    </div>
+    <p class="provider-note">${escapeHtml(providerDescription(provider))}</p>
+  `;
+
+  if (provider.enabled) {
+    const endpointRow = renderEndpointRow(provider);
+    if (endpointRow) card.appendChild(endpointRow);
+    card.appendChild(renderModelPicker(provider));
+    card.appendChild(renderKeyRow(provider));
+    card.appendChild(renderActions(provider));
+  }
+  box.appendChild(card);
 }
 
 function renderEndpointRow(provider) {
@@ -142,72 +172,61 @@ function renderEndpointRow(provider) {
     select.appendChild(option);
   }
   select.value = selectedEndpointFor(provider);
-  select.addEventListener("change", () => {
-    state.endpoints[provider.id] = select.value;
-    renderSummary(provider);
-  });
   const selected = selectedEndpointOption(provider);
-  wrap.innerHTML = `<label for="endpointInput-${escapeHtml(provider.id)}">MiMo 接口</label>`;
+  wrap.innerHTML = `<label for="endpointInput-${escapeHtml(provider.id)}">接口</label>`;
   wrap.appendChild(select);
   const hint = document.createElement("small");
   hint.className = "field-hint";
-  hint.id = `endpointHint-${provider.id}`;
   hint.textContent = selected?.description || "";
   select.addEventListener("change", () => {
+    state.endpoints[provider.id] = select.value;
     const next = selectedEndpointOption(provider);
     hint.textContent = next?.description || "";
+    renderProviderDetail();
   });
   if (hint.textContent) wrap.appendChild(hint);
   return wrap;
 }
 
-function renderMappingTable(provider) {
+function renderModelPicker(provider) {
   const wrap = document.createElement("div");
-  wrap.className = "mapping-box";
-  wrap.innerHTML = `<div class="panel-title">Codex 模型映射</div>`;
+  wrap.className = "model-box";
+  wrap.innerHTML = `<div class="panel-title">默认模型</div>`;
+
+  const picker = document.createElement("label");
+  picker.className = "field-row compact";
+  picker.innerHTML = `<span>本次 Codex 默认使用</span>`;
+  const select = document.createElement("select");
+  select.id = `modelInput-${provider.id}`;
+  for (const model of providerModels(provider)) {
+    const option = document.createElement("option");
+    option.value = model.id;
+    option.textContent = modelLabel(model);
+    select.appendChild(option);
+  }
+  select.value = selectedModelFor(provider);
+  select.addEventListener("change", () => {
+    state.selectedModels[provider.id] = select.value;
+    renderProviders();
+  });
+  picker.appendChild(select);
+  wrap.appendChild(picker);
+
   const list = document.createElement("div");
-  list.className = "mapping-list";
-  const selectedMappings = state.mappings[provider.id] || {};
-  for (const codex of codexModels()) {
-    const row = document.createElement("label");
-    row.className = "mapping-row";
-    const select = document.createElement("select");
-    select.dataset.codexId = codex.id;
-    for (const model of providerModels(provider)) {
-      const option = document.createElement("option");
-      option.value = model.id;
-      option.textContent = `${model.label} (${model.upstream})`;
-      select.appendChild(option);
-    }
-    select.value = selectedMappings[codex.id] || providerModels(provider)[0]?.id || "";
-    select.addEventListener("change", () => {
-      state.mappings[provider.id][codex.id] = select.value;
-      renderSummary(provider);
+  list.className = "real-model-list";
+  for (const model of providerModels(provider)) {
+    const item = document.createElement("button");
+    item.type = "button";
+    item.className = `real-model-chip ${model.id === selectedModelFor(provider) ? "active" : ""}`;
+    item.textContent = model.upstream || model.id;
+    item.addEventListener("click", () => {
+      state.selectedModels[provider.id] = model.id;
+      renderProviders();
     });
-    row.innerHTML = `<span><b>${escapeHtml(codex.label)}</b><em>${escapeHtml(codex.id)}</em></span>`;
-    row.appendChild(select);
-    list.appendChild(row);
+    list.appendChild(item);
   }
   wrap.appendChild(list);
-  const summary = document.createElement("pre");
-  summary.className = "mapping-summary";
-  summary.id = `summary-${provider.id}`;
-  wrap.appendChild(summary);
-  setTimeout(() => renderSummary(provider), 0);
   return wrap;
-}
-
-function renderSummary(provider) {
-  const summary = document.getElementById(`summary-${provider.id}`);
-  if (!summary) return;
-  const selectedMappings = state.mappings[provider.id] || {};
-  summary.textContent = codexModels()
-    .map((codex) => `${codex.id} -> ${upstreamByModelId(provider, selectedMappings[codex.id])}`)
-    .join("\n");
-  const endpoint = selectedEndpointOption(provider);
-  if (endpoint?.label) {
-    summary.textContent = `endpoint -> ${endpoint.label}\n${summary.textContent}`;
-  }
 }
 
 function renderKeyRow(provider) {
@@ -225,10 +244,8 @@ function renderActions(provider) {
   wrap.className = "actions";
   wrap.innerHTML = `
     <button class="primary-button" type="button">激活 ${escapeHtml(provider.name)}</button>
-    <button id="stopButton" class="secondary-button" type="button">停止 Adapter</button>
   `;
   wrap.querySelector(".primary-button").addEventListener("click", () => launch(provider));
-  wrap.querySelector(".secondary-button").addEventListener("click", stopAdapter);
   return wrap;
 }
 
@@ -238,6 +255,7 @@ function renderProviders() {
   for (const provider of providers()) {
     box.appendChild(renderProviderCard(provider));
   }
+  renderProviderDetail();
 }
 
 function setResult(text, kind = "") {
@@ -286,9 +304,9 @@ async function loadManifest() {
 
 async function launch(provider) {
   const apiKey = document.getElementById(`apiKeyInput-${provider.id}`)?.value.trim() || "";
-  if (!apiKey) return setResult("請貼上這次要注入的 API key。", "bad");
+  if (!apiKey) return setResult("请贴上这次要注入的 API key。", "bad");
   state.launching = true;
-  setResult("正在注入並啟動...", "");
+  setResult("正在注入并启动...", "");
   try {
     const data = await api("/api/launch", {
       method: "POST",
@@ -296,17 +314,21 @@ async function launch(provider) {
       body: JSON.stringify({
         provider_id: provider.id,
         endpoint_id: selectedEndpointFor(provider),
+        model_id: selectedModelFor(provider),
         api_key: apiKey,
-        mappings: state.mappings[provider.id] || defaultsFor(provider),
       }),
     });
     const input = document.getElementById(`apiKeyInput-${provider.id}`);
     if (input) input.value = "";
-    setResult(data.message || "Zhuda-Codex 已啟動。", "ok");
+    setResult(data.message || "Zhuda-Codex 已启动。", "ok");
     if (data.launcherWillExit) {
       if (state.statusTimer) window.clearInterval(state.statusTimer);
-      setStatus("Codex 已啟動，Launcher 即將關閉", "ok");
-      $("logBox").textContent = `${data.message || "Zhuda-Codex 已啟動。"}\n\n這個啟動頁會自動結束；Codex 和 adapter 會繼續運行。`;
+      setStatus("Codex 已启动，可以关闭此页", "ok");
+      $("logBox").textContent = `${data.message || "Zhuda-Codex 已启动。"}\n\n已尝试自动关闭 Launcher；如果浏览器阻挡关闭，直接关闭此页即可。Codex 和 adapter 会继续运行。`;
+      window.setTimeout(() => {
+        window.open("", "_self");
+        window.close();
+      }, Number(data.shutdownDelaySeconds || 1) * 1000);
     } else {
       await refreshStatus();
     }
@@ -329,6 +351,7 @@ async function stopAdapter() {
 }
 
 $("refreshButton").addEventListener("click", refreshStatus);
+$("stopButton").addEventListener("click", stopAdapter);
 
 loadManifest()
   .then(refreshStatus)

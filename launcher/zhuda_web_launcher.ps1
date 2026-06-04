@@ -149,11 +149,48 @@ function Get-UpstreamModels {
     return @($Provider.models)
 }
 
+function Get-DefaultModelId {
+    param($Provider)
+    if ($Provider.PSObject.Properties["default_model"] -and $Provider.default_model) {
+        return [string]$Provider.default_model
+    }
+    $models = Get-UpstreamModels $Provider
+    if ($models.Count -gt 0) { return [string]$models[0].id }
+    return ""
+}
+
+function Get-UpstreamById {
+    param($Provider, [string]$ModelId)
+    $models = Get-UpstreamModels $Provider
+    foreach ($model in $models) {
+        if ($model.id -eq $ModelId -or $model.upstream -eq $ModelId) {
+            return [string]$model.upstream
+        }
+    }
+    if ($models.Count -gt 0) { return [string]$models[0].upstream }
+    return ""
+}
+
+function Get-VisibleModels {
+    param($Provider)
+    $seen = @{}
+    $out = New-Object System.Collections.Generic.List[string]
+    foreach ($model in (Get-UpstreamModels $Provider)) {
+        $value = [string]$model.upstream
+        if ($value -and -not $seen.ContainsKey($value)) {
+            $seen[$value] = $true
+            $out.Add($value) | Out-Null
+        }
+    }
+    return $out.ToArray()
+}
+
 function Resolve-Mapping {
-    param($Manifest, $Provider, $Mappings)
+    param($Manifest, $Provider, $Mappings, [string]$SelectedModelId)
     $out = [ordered]@{}
     $models = Get-UpstreamModels $Provider
     $first = if ($models.Count -gt 0) { [string]$models[0].upstream } else { "" }
+    $selectedUpstream = Get-UpstreamById $Provider $SelectedModelId
     foreach ($codex in @($Manifest.codex_models)) {
         $codexId = [string]$codex.id
         $selected = ""
@@ -170,6 +207,13 @@ function Resolve-Mapping {
         }
         if ($codexId -and $upstream) { $out[$codexId] = $upstream }
     }
+    if ($selectedUpstream) {
+        $out["zhuda-codex"] = $selectedUpstream
+        $out["gemini-codex"] = $selectedUpstream
+    }
+    foreach ($model in (Get-VisibleModels $Provider)) {
+        $out[$model] = $model
+    }
     return $out
 }
 
@@ -179,7 +223,7 @@ function Quote-Arg {
 }
 
 function Start-HeadlessLaunch {
-    param($Provider, $Mappings, [string]$ApiKey, [string]$EndpointId, [string]$BaseUrl)
+    param($Provider, $Mappings, [string]$ApiKey, [string]$EndpointId, [string]$BaseUrl, [string]$ModelId)
     if (-not (Test-Path $LaunchScript)) {
         throw "Missing launch script: $LaunchScript"
     }
@@ -198,6 +242,8 @@ function Start-HeadlessLaunch {
     $psi.CreateNoWindow = $true
     $psi.EnvironmentVariables["ZHUDA_WEB_LAUNCH_API_KEY"] = $ApiKey
     $psi.EnvironmentVariables["ZHUDA_WEB_LAUNCH_MAPPINGS"] = ($Mappings | ConvertTo-Json -Depth 20 -Compress)
+    $psi.EnvironmentVariables["ZHUDA_WEB_LAUNCH_MODEL_ID"] = $ModelId
+    $psi.EnvironmentVariables["ZHUDA_WEB_LAUNCH_VISIBLE_MODELS"] = ((Get-VisibleModels $Provider) -join ",")
     if ($EndpointId) { $psi.EnvironmentVariables["ZHUDA_WEB_LAUNCH_ENDPOINT_ID"] = $EndpointId }
     if ($BaseUrl) { $psi.EnvironmentVariables["ZHUDA_WEB_LAUNCH_BASE_URL"] = $BaseUrl }
     [Diagnostics.Process]::Start($psi) | Out-Null
@@ -249,14 +295,22 @@ function Handle-Request {
             if (-not $apiKey) { throw "API key is empty." }
             $endpointId = ""
             if ($payload.PSObject.Properties["endpoint_id"]) { $endpointId = [string]$payload.endpoint_id }
+            $modelId = Get-DefaultModelId $provider
+            if ($payload.PSObject.Properties["model_id"] -and $payload.model_id) { $modelId = [string]$payload.model_id }
             $baseUrl = Get-ProviderBaseUrl $provider $endpointId
-            $resolvedMappings = Resolve-Mapping $manifest $provider $payload.mappings
+            $mappingsPayload = $null
+            if ($payload.PSObject.Properties["mappings"]) { $mappingsPayload = $payload.mappings }
+            $resolvedMappings = Resolve-Mapping $manifest $provider $mappingsPayload $modelId
+            $visibleModels = Get-VisibleModels $provider
+            $selectedUpstream = Get-UpstreamById $provider $modelId
             if ($resolvedMappings.Count -le 0) { throw "No model mappings were selected." }
-            Start-HeadlessLaunch $provider $resolvedMappings $apiKey $endpointId $baseUrl
+            Start-HeadlessLaunch $provider $resolvedMappings $apiKey $endpointId $baseUrl $modelId
             Send-Json $Context 200 @{
                 ok = $true
-                message = "已啟動 $($provider.name)，$($resolvedMappings.Count) 個 Codex 模型映射已注入。"
+                message = "已启动 $($provider.name)，默认 $selectedUpstream，$($visibleModels.Count) 个真实模型可供 Codex 使用。"
                 endpoint = $endpointId
+                selectedModel = $selectedUpstream
+                visibleModels = $visibleModels
                 launcherWillExit = $true
                 shutdownDelaySeconds = 1.2
             }

@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-Hant">
+<html lang="zh-CN">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -16,12 +16,15 @@
       </div>
       <div class="brand-copy">
         <p class="eyebrow">Zhuda-Codex</p>
-        <h1>選廠商，配模型，啟動。</h1>
-        <p>每次只注入本次 API key；GPT 選單要映射到哪個上游模型，在這裡直接決定。</p>
+        <h1>选厂商，选模型，启动。</h1>
+        <p>每次只注入本次 API key；Codex 会优先使用你选择的真实上游模型。</p>
       </div>
       <div class="status-strip">
         <span id="statusDot" class="dot"></span>
         <span id="statusText">Checking launcher...</span>
+      </div>
+      <div class="side-actions">
+        <button id="stopButton" class="secondary-button" type="button">停止 Adapter</button>
       </div>
       <div class="log-panel">
         <div class="panel-title">Runtime</div>
@@ -33,12 +36,13 @@
       <div class="topline">
         <div>
           <p class="eyebrow">Providers</p>
-          <h2>啟動器</h2>
+        <h2>启动器</h2>
         </div>
         <button id="refreshButton" type="button" class="icon-button" title="Refresh status">↻</button>
       </div>
 
       <div id="providerList" class="provider-list"></div>
+      <div id="providerDetail" class="provider-detail"></div>
       <div id="resultBox" class="result-box" aria-live="polite"></div>
     </section>
   </main>
