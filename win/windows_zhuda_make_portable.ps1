@@ -252,7 +252,10 @@ function Start-ModelInjector {
         "-DefaultModel", $SelectedModel,
         "-ProviderName", "Zhuda-Codex",
         "-DurationSeconds", "0",
-        "-IdleExitSeconds", "300"
+        "-IntervalMilliseconds", "250",
+        "-IdleExitSeconds", "300",
+        "-Preload",
+        "-ReloadOnce"
     ) -WindowStyle Hidden -RedirectStandardOutput $ModelInjectorLogPath -RedirectStandardError $ModelInjectorErrPath | Out-Null
 }
 
@@ -405,8 +408,9 @@ if (-not (Test-Adapter)) {
 
 if (-not $NoLaunch) {
     $cdpPort = Get-FreeCdpPort
-    Start-DetachedProcess -FilePath $AppExe -ArgumentList @("--user-data-dir=$ElectronData", "--remote-debugging-address=127.0.0.1", "--remote-debugging-port=$cdpPort") -WindowStyle 1
     Start-ModelInjector $cdpPort $codexModel
+    Start-Sleep -Milliseconds 250
+    Start-DetachedProcess -FilePath $AppExe -ArgumentList @("--user-data-dir=$ElectronData", "--remote-debugging-address=127.0.0.1", "--remote-debugging-port=$cdpPort") -WindowStyle 1
 }
 '@
     $localPs1 = $localPs1.Replace("__DEFAULT_MODEL__", $DefaultModel)

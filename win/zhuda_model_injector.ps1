@@ -6,7 +6,9 @@ param(
     [string]$ProviderName = "Zhuda-Codex",
     [int]$DurationSeconds = 75,
     [int]$IntervalMilliseconds = 1200,
-    [int]$IdleExitSeconds = 300
+    [int]$IdleExitSeconds = 300,
+    [switch]$Preload,
+    [switch]$ReloadOnce
 )
 
 Set-StrictMode -Off
@@ -44,16 +46,12 @@ function Get-DevToolsTargets {
     return @()
 }
 
-function Send-CdpEvaluate {
-    param([string]$WebSocketUrl, [string]$Expression, [int]$Id)
+function Send-CdpCommand {
+    param([string]$WebSocketUrl, [string]$Method, $Params, [int]$Id)
     $payload = @{
         id = $Id
-        method = "Runtime.evaluate"
-        params = @{
-            expression = $Expression
-            awaitPromise = $false
-            returnByValue = $true
-        }
+        method = $Method
+        params = $Params
     } | ConvertTo-Json -Depth 20 -Compress
 
     $ws = New-Object System.Net.WebSockets.ClientWebSocket
@@ -78,6 +76,29 @@ function Send-CdpEvaluate {
     } catch {}
     try { $ws.CloseAsync([System.Net.WebSockets.WebSocketCloseStatus]::NormalClosure, "done", [Threading.CancellationToken]::None).Wait(200) | Out-Null } catch {}
     try { $ws.Dispose() } catch {}
+}
+
+function Send-CdpEvaluate {
+    param([string]$WebSocketUrl, [string]$Expression, [int]$Id)
+    Send-CdpCommand $WebSocketUrl "Runtime.evaluate" @{
+        expression = $Expression
+        awaitPromise = $false
+        returnByValue = $true
+    } $Id
+}
+
+function Send-CdpPreload {
+    param([string]$WebSocketUrl, [string]$Expression, [int]$Id)
+    Send-CdpCommand $WebSocketUrl "Page.addScriptToEvaluateOnNewDocument" @{
+        source = $Expression
+    } $Id
+}
+
+function Send-CdpReload {
+    param([string]$WebSocketUrl, [int]$Id)
+    Send-CdpCommand $WebSocketUrl "Page.reload" @{
+        ignoreCache = $true
+    } $Id
 }
 
 function New-InjectionExpression {
@@ -438,6 +459,8 @@ $startedAt = [DateTime]::UtcNow
 $lastSeenAt = $null
 $lastLogAt = [DateTime]::MinValue
 $lastMissLogAt = [DateTime]::MinValue
+$preloadedTargets = @{}
+$reloadedTargets = @{}
 $seq = 1
 $total = 0
 while ($runForever -or [DateTime]::UtcNow -lt $deadline) {
@@ -448,7 +471,23 @@ while ($runForever -or [DateTime]::UtcNow -lt $deadline) {
         $wsUrl = [string]$target.webSocketDebuggerUrl
         $type = [string]$target.type
         if (-not $wsUrl -or @("page", "webview", "other") -notcontains $type) { continue }
+        $targetKey = [string]$target.id
+        if (-not $targetKey) { $targetKey = $wsUrl }
         $targetCount += 1
+        if ($Preload -and -not $preloadedTargets.ContainsKey($targetKey)) {
+            try {
+                Send-CdpPreload $wsUrl $expression $seq
+                $preloadedTargets[$targetKey] = $true
+                $seq += 1
+            } catch {}
+            if ($ReloadOnce -and @("page", "webview") -contains $type -and -not $reloadedTargets.ContainsKey($targetKey)) {
+                $reloadedTargets[$targetKey] = $true
+                try {
+                    Send-CdpReload $wsUrl $seq
+                    $seq += 1
+                } catch {}
+            }
+        }
         try {
             Send-CdpEvaluate $wsUrl $expression $seq
             $count += 1
