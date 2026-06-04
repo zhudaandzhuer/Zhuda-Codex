@@ -226,6 +226,36 @@ function Save-ActiveModel {
     Write-Host "Active upstream model: $script:GeminiModel" -ForegroundColor Green
 }
 
+function Get-VisibleModelNames {
+    $raw = [Environment]::GetEnvironmentVariable("ZHUDA_VISIBLE_MODELS", "Process")
+    if (-not $raw -and $script:Provider -eq "mimo") {
+        $raw = [Environment]::GetEnvironmentVariable("ZHUDA_MIMO_VISIBLE_MODELS", "Process")
+    }
+    if (-not $raw) {
+        $raw = [Environment]::GetEnvironmentVariable("ZHUDA_GEMINI_VISIBLE_MODELS", "Process")
+    }
+    $items = New-Object System.Collections.Generic.List[string]
+    if ($raw) {
+        foreach ($item in ($raw -split ",")) {
+            $name = $item.Trim()
+            if ($name -and -not $items.Contains($name)) { $items.Add($name) | Out-Null }
+        }
+    }
+    foreach ($value in @($script:ModelMappings.Values)) {
+        $name = ([string]$value).Trim()
+        if ($name -and -not $items.Contains($name)) { $items.Add($name) | Out-Null }
+    }
+    if ($GeminiModel -and -not $items.Contains($GeminiModel)) { $items.Insert(0, $GeminiModel) }
+    if ($items.Count -eq 0) {
+        if ($script:Provider -eq "mimo") {
+            @("mimo-v2.5-pro", "mimo-v2.5") | ForEach-Object { $items.Add($_) | Out-Null }
+        } else {
+            @("gemini-3.5-flash", "gemini-3-flash-preview", "gemini-3.1-flash-lite", "gemini-3.1-pro", "gemma-4-31b-it") | ForEach-Object { $items.Add($_) | Out-Null }
+        }
+    }
+    return @($items.ToArray())
+}
+
 function Save-ActiveApiKey {
     param([string]$Key)
     Ensure-Runtime
@@ -1599,14 +1629,19 @@ function Remove-TopLevelKey {
 }
 
 function Get-ZhudaModelCatalogSpecs {
-    return @(
-        @{ Slug = "zhuda-gemma-31b"; Display = "Zhuda Gemma 31B"; Description = "Zhuda local Gemini adapter routed to Gemma 4 31B."; Priority = 9 },
-        @{ Slug = "zhuda-flash-3-5"; Display = "Zhuda Flash 3.5"; Description = "Zhuda local Gemini adapter routed to Gemini 3.5 Flash."; Priority = 16 },
-        @{ Slug = "zhuda-flash-lite"; Display = "Zhuda Flash Lite"; Description = "Zhuda local Gemini adapter routed to Gemini 3.1 Flash Lite."; Priority = 23 },
-        @{ Slug = "zhuda-gemma-26b"; Display = "Zhuda Gemma 26B"; Description = "Zhuda local Gemini adapter routed to Gemma 4 26B."; Priority = 30 },
-        @{ Slug = "zhuda-flash-3"; Display = "Zhuda Flash 3 Preview"; Description = "Zhuda local Gemini adapter routed to Gemini 3 Flash Preview."; Priority = 37 },
-        @{ Slug = "gemini-codex"; Display = "Zhuda Runtime Default"; Description = "Zhuda compatibility model. Uses the active runtime model configured on this computer."; Priority = 44 }
-    )
+    Load-ActiveProvider
+    Load-ModelMappings
+    Load-ActiveModel
+    $names = @(Get-VisibleModelNames)
+    $specs = New-Object System.Collections.Generic.List[object]
+    $priority = 9
+    foreach ($name in $names) {
+        $display = $name
+        $description = "Zhuda-Codex $Provider upstream model."
+        $specs.Add(@{ Slug = $name; Display = $display; Description = $description; Priority = $priority }) | Out-Null
+        $priority += 7
+    }
+    return @($specs.ToArray())
 }
 
 function New-MinimalCatalogTemplate {
@@ -1684,6 +1719,10 @@ function New-ZhudaCatalogModel {
 
 function Write-ZhudaModelCatalog {
     Ensure-Runtime
+    New-Item -ItemType Directory -Force -Path $ConfigDir | Out-Null
+    if ((Test-Path $ModelCachePath) -and -not (Test-Path $ModelCacheBackupPath)) {
+        Copy-Item $ModelCachePath $ModelCacheBackupPath -Force
+    }
     $template = Get-CatalogTemplate
     $cacheMeta = $null
     if (Test-Path $ModelCachePath) {
@@ -1702,7 +1741,9 @@ function Write-ZhudaModelCatalog {
     $enc = New-Object System.Text.UTF8Encoding($false)
     $json = $catalog | ConvertTo-Json -Depth 100
     [System.IO.File]::WriteAllText($ModelCatalogPath, $json, $enc)
+    [System.IO.File]::WriteAllText($ModelCachePath, $json, $enc)
     Write-Host "Wrote Zhuda model catalog: $ModelCatalogPath" -ForegroundColor Green
+    Write-Host "Injected Zhuda model cache: $ModelCachePath" -ForegroundColor Green
 }
 
 function Restore-CodexModelCacheForDesktop {
@@ -1715,7 +1756,7 @@ function Restore-CodexModelCacheForDesktop {
 function Set-LocalCodexConfigText {
     param([string]$Text)
     $text = Repair-ConfigText $Text
-    $text = Set-TopLevelString $text "model" "gpt-5.4-mini"
+    $text = Set-TopLevelString $text "model" $GeminiModel
     $text = Set-TopLevelString $text "model_provider" "zhuda_gemini_pool"
     $text = Remove-TopLevelKey $text "model_catalog_json"
     $text = Set-TopLevelNumber $text "model_context_window" 49152
@@ -1748,7 +1789,6 @@ function Switch-ToLocalCodex {
     if (-not (Test-Path $BackupPath)) { Copy-Item $ConfigPath $BackupPath -Force }
     Start-LocalServer
     Write-ZhudaModelCatalog
-    Restore-CodexModelCacheForDesktop
     Enable-LocalModeMarker
     Write-ConfigText (Set-LocalCodexConfigText (Read-ConfigText))
     Restart-Codex
@@ -1766,7 +1806,6 @@ function Switch-ActiveModelOnly {
     Stop-LocalServer
     Start-LocalServer
     Write-ZhudaModelCatalog
-    Restore-CodexModelCacheForDesktop
     Enable-LocalModeMarker
     Write-ConfigText (Set-LocalCodexConfigText (Read-ConfigText))
     Restart-Codex

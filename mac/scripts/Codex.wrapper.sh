@@ -73,6 +73,125 @@ experimental_bearer_token = "zhuda-codex-local-token"
 EOF
 }
 
+write_model_cache() {
+  local models
+  models="$(selected_visible_models)"
+  if [[ -z "$models" ]]; then
+    return 0
+  fi
+
+  local default_model="${ZHUDA_SELECTED_CODEX_MODEL:-${ZHUDA_SELECTED_UPSTREAM_MODEL:-}}"
+  if [[ -z "$default_model" ]]; then
+    default_model="${models%%,*}"
+  fi
+  local provider_name="${ZHUDA_PROVIDER:-Zhuda-Codex}"
+  local cache_file="${CODEX_HOME_DIR}/models_cache.json"
+  local template_file="${HOME}/.codex/models_cache.json"
+  local python_bin="/usr/bin/python3"
+  if [[ ! -x "$python_bin" && -x "$ADAPTER_RUNNER" ]]; then
+    python_bin="$ADAPTER_RUNNER"
+  fi
+  if [[ ! -x "$python_bin" ]]; then
+    return 0
+  fi
+
+  "$python_bin" - "$cache_file" "$template_file" "$models" "$default_model" "$provider_name" <<'PY'
+import copy
+import json
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+cache_file = Path(sys.argv[1])
+template_file = Path(sys.argv[2])
+models = []
+for item in sys.argv[3].split(","):
+    item = item.strip()
+    if item and item not in models:
+        models.append(item)
+default_model = (sys.argv[4] or "").strip() or (models[0] if models else "zhuda-codex")
+provider_name = (sys.argv[5] or "Zhuda-Codex").strip()
+if default_model and default_model not in models:
+    models.insert(0, default_model)
+
+def fallback_model():
+    return {
+        "slug": "template",
+        "display_name": "Template",
+        "description": "Template",
+        "default_reasoning_level": "medium",
+        "supported_reasoning_levels": [
+            {"effort": "low", "description": "Fast responses"},
+            {"effort": "medium", "description": "Balanced reasoning"},
+            {"effort": "high", "description": "More deliberate reasoning"},
+            {"effort": "xhigh", "description": "Maximum reasoning"},
+        ],
+        "shell_type": "shell_command",
+        "visibility": "list",
+        "supported_in_api": True,
+        "priority": 99,
+        "additional_speed_tiers": [],
+        "service_tiers": [],
+        "availability_nux": None,
+        "upgrade": None,
+        "base_instructions": "You are Codex, a coding agent.",
+        "supports_reasoning_summaries": False,
+        "default_reasoning_summary": "auto",
+        "support_verbosity": False,
+        "default_verbosity": None,
+        "apply_patch_tool_type": None,
+        "web_search_tool_type": "text",
+        "truncation_policy": {"mode": "tokens", "limit": 10000},
+        "supports_parallel_tool_calls": False,
+        "supports_image_detail_original": False,
+        "effective_context_window_percent": 95,
+        "experimental_supported_tools": [],
+        "input_modalities": ["text", "image"],
+        "supports_search_tool": False,
+    }
+
+template = None
+cache_meta = {}
+if template_file.exists():
+    try:
+        cache_meta = json.loads(template_file.read_text(encoding="utf-8"))
+        for item in cache_meta.get("models") or []:
+            if item.get("slug") in ("gpt-5.5", "gpt-5.4-mini"):
+                template = item
+                break
+        if template is None and cache_meta.get("models"):
+            template = cache_meta["models"][0]
+    except Exception:
+        template = None
+if template is None:
+    template = fallback_model()
+
+out_models = []
+for index, model_name in enumerate(models):
+    item = copy.deepcopy(template)
+    item["slug"] = model_name
+    item["display_name"] = model_name
+    item["description"] = f"{provider_name} upstream model"
+    item["visibility"] = "list"
+    item["supported_in_api"] = True
+    item["availability_nux"] = None
+    item["upgrade"] = None
+    item["additional_speed_tiers"] = []
+    item["service_tiers"] = []
+    item["priority"] = 9 + index * 7
+    out_models.append(item)
+
+payload = {
+    "fetched_at": cache_meta.get("fetched_at") or datetime.now(timezone.utc).isoformat(),
+    "etag": f"zhuda-{provider_name}",
+    "client_version": cache_meta.get("client_version") or "zhuda-local",
+    "models": out_models,
+}
+cache_file.parent.mkdir(parents=True, exist_ok=True)
+cache_file.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+PY
+}
+
 prepare_adapter_runtime() {
   if [[ ! -x "$ADAPTER_RUNNER" ]]; then
     if [[ -x "${BUNDLED_VENV_ROOT}/bin/python" ]]; then
@@ -354,6 +473,7 @@ if [[ "$SESSION_LAUNCH" == "1" ]]; then
   trap 'stop_adapter; cleanup_session_env' EXIT
   start_adapter || true
   choose_cdp_port
+  write_model_cache
   set_codex_debug_args
   start_model_injector
   "$APP_DIR/MacOS/Codex.real" "${ZHUDA_CODEX_DEBUG_ARGS[@]}" --user-data-dir="$USER_DATA_DIR" "$@"
@@ -363,6 +483,7 @@ fi
 start_adapter || true
 
 choose_cdp_port
+write_model_cache
 set_codex_debug_args
 start_model_injector
 
