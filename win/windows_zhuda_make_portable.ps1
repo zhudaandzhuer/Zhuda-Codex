@@ -135,6 +135,29 @@ function Write-Utf8NoBom {
     [IO.File]::WriteAllText($Path, $Text, $enc)
 }
 
+function Ensure-PortableKnownFolders {
+    $known = @(
+        @{ name = "Desktop"; target = [Environment]::GetFolderPath("Desktop") },
+        @{ name = "Documents"; target = [Environment]::GetFolderPath("MyDocuments") },
+        @{ name = "Downloads"; target = (Join-Path $env:USERPROFILE "Downloads") },
+        @{ name = "Pictures"; target = [Environment]::GetFolderPath("MyPictures") },
+        @{ name = "Music"; target = [Environment]::GetFolderPath("MyMusic") },
+        @{ name = "Videos"; target = [Environment]::GetFolderPath("MyVideos") }
+    )
+    foreach ($item in $known) {
+        $link = Join-Path $ProfileRoot $item.name
+        if (Test-Path $link) { continue }
+        $target = [string]$item.target
+        if ($target -and (Test-Path $target)) {
+            try {
+                New-Item -ItemType Junction -Path $link -Target $target -ErrorAction Stop | Out-Null
+                continue
+            } catch {}
+        }
+        Ensure-Dir $link
+    }
+}
+
 function Resolve-CodexModelSlug {
     param([string]$Name)
     if ($null -eq $Name) { $Name = "" }
@@ -337,6 +360,7 @@ function Write-ModelCache {
 }
 
 Ensure-Dir $ProfileRoot
+Ensure-PortableKnownFolders
 Ensure-Dir $CodexHome
 Ensure-Dir $AppData
 Ensure-Dir $LocalAppData
