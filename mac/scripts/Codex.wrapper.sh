@@ -451,9 +451,6 @@ bundle_model_patch_enabled() {
 }
 
 start_model_injector() {
-  if bundle_model_patch_enabled; then
-    return 0
-  fi
   local models
   models="$(selected_visible_models)"
   if [[ -z "$models" ]]; then
@@ -482,9 +479,6 @@ start_model_injector() {
 ZHUDA_CODEX_DEBUG_ARGS=()
 set_codex_debug_args() {
   ZHUDA_CODEX_DEBUG_ARGS=()
-  if bundle_model_patch_enabled; then
-    return 0
-  fi
   if [[ -n "$(selected_visible_models)" ]]; then
     ZHUDA_CODEX_DEBUG_ARGS=("--remote-debugging-address=127.0.0.1" "--remote-debugging-port=${CDP_PORT}")
   fi
