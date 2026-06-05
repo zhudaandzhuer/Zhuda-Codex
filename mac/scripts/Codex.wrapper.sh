@@ -490,6 +490,14 @@ set_codex_debug_args() {
   fi
 }
 
+run_codex_real() {
+  if [[ ${#ZHUDA_CODEX_DEBUG_ARGS[@]} -gt 0 ]]; then
+    "$APP_DIR/MacOS/Codex.real" "${ZHUDA_CODEX_DEBUG_ARGS[@]}" --user-data-dir="$USER_DATA_DIR" "$@"
+  else
+    "$APP_DIR/MacOS/Codex.real" --user-data-dir="$USER_DATA_DIR" "$@"
+  fi
+}
+
 export CODEX_HOME="$CODEX_HOME_DIR"
 export ZHUDA_CODEX_GEMINI_APP="1"
 export ELECTRON_NO_UPDATER="1"
@@ -543,7 +551,7 @@ if [[ "$SESSION_LAUNCH" == "1" ]]; then
   write_model_cache
   set_codex_debug_args
   start_model_injector
-  "$APP_DIR/MacOS/Codex.real" "${ZHUDA_CODEX_DEBUG_ARGS[@]}" --user-data-dir="$USER_DATA_DIR" "$@"
+  run_codex_real "$@"
   exit $?
 fi
 
@@ -554,4 +562,8 @@ write_model_cache
 set_codex_debug_args
 start_model_injector
 
-exec "$APP_DIR/MacOS/Codex.real" "${ZHUDA_CODEX_DEBUG_ARGS[@]}" --user-data-dir="$USER_DATA_DIR" "$@"
+if [[ ${#ZHUDA_CODEX_DEBUG_ARGS[@]} -gt 0 ]]; then
+  exec "$APP_DIR/MacOS/Codex.real" "${ZHUDA_CODEX_DEBUG_ARGS[@]}" --user-data-dir="$USER_DATA_DIR" "$@"
+else
+  exec "$APP_DIR/MacOS/Codex.real" --user-data-dir="$USER_DATA_DIR" "$@"
+fi
